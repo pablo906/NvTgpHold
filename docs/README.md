@@ -10,7 +10,7 @@ ASUS ROG Zephyrus G14 (GA403WW) above the stock 95 W + 25 W Dynamic Boost cap.
 ## Pages
 
 - [Installation](Installation.md): download, requirements, first run
-- [Usage](Usage.md): what each tray menu item does and a recommended workflow
+- [Usage](Usage.md): what each tray menu item does, a recommended workflow, and recommended Windows power settings
 - [Safety](Safety.md): risks, monitoring, and how to revert
 - [Troubleshooting](Troubleshooting.md): common errors and fixes
 - [Building from Source](Building-from-Source.md)

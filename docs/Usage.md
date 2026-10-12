@@ -77,7 +77,7 @@ reboot.
 
 ## Recommended workflow
 
-1. Plug in the charger.
+1. Plug in the charger and check the [Windows power settings](#recommended-windows-power-settings) below.
 2. **Run firmware / driver test**, confirm PASS.
 3. If needed, **Set MAX ceiling** to a modest value such as 130 W and reboot.
 4. **Hold CURRENT** at or below MAX.
@@ -96,3 +96,39 @@ settings. NvTgpHold re-asserts on its 5-minute cycle, but there can be a short g
 
 On battery the platform may still cap power regardless of the hold. Raised limits are intended
 for use on the charger.
+
+## Recommended Windows power settings
+
+Pair NvTgpHold with these Windows settings so the CPU and GPU get full power on the charger and
+the laptop saves energy on battery.
+
+### 1. Control Panel power plan: Balanced
+
+1. Press **Win + R**, type `powercfg.cpl`, press Enter.
+2. Select **Balanced**.
+
+Keep the classic plan on Balanced. Windows only applies the per-source power modes below while
+the Balanced plan is active; picking *High performance* or *Ultimate Performance* here overrides
+them and keeps the laptop at full power on battery too.
+
+### 2. Settings power mode: best performance on AC, best efficiency on battery
+
+1. Open **Settings → System → Power & battery**.
+2. Under **Power mode**, set:
+   - **Plugged in**: **Best performance**
+   - **On battery**: **Best power efficiency**
+
+If your Windows version shows a single Power mode drop-down instead of separate plugged in / on
+battery choices, set it to Best performance while on the charger and Best power efficiency while
+on battery.
+
+Command-line equivalent for step 1 (elevated terminal): `powercfg /setactive SCHEME_BALANCED`
+
+### Why this matters
+
+- On the charger, *Best performance* lets the CPU boost freely, so the extra GPU power from a
+  held CURRENT limit isn't wasted by a CPU bottleneck.
+- On battery, *Best power efficiency* keeps drain and heat down; the platform caps GPU power on
+  battery anyway (see [Safety](Safety.md)).
+- Armoury Crate or G-Helper modes may also change these settings. If you use them, check the
+  Power mode again after switching their profile.

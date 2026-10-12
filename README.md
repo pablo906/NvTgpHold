@@ -1,0 +1,63 @@
+# NvTgpHold
+
+A small Windows tray tool for the ASUS ROG Zephyrus G14 (GA403WW, RTX 50-series laptop GPU)
+that raises and holds the NVIDIA GPU's power limit above the stock platform cap.
+
+> ## ⚠️ SAFETY DISCLAIMER — READ BEFORE USE
+>
+> **This tool changes GPU power and boost limits beyond the manufacturer's defaults.**
+> Running hardware outside its stock power envelope can cause higher temperatures,
+> instability, crashes, accelerated wear, battery/charger stress, or **permanent hardware damage**.
+> It writes to the NVIDIA driver registry key and sends undocumented NvAPI / ASUS ATK ACPI calls.
+>
+> - It is **unofficial** and not affiliated with or endorsed by NVIDIA or ASUS.
+> - It may **void your warranty**.
+> - It was developed and tested on **one machine** (GA403WW). Other models, BIOS versions or
+>   driver versions may behave differently or not at all.
+> - Monitor temperatures and power draw while using it.
+>
+> **You use this software entirely at your own risk.** The authors accept no liability for any
+> damage, data loss or other consequences (see [LICENSE](LICENSE)).
+
+## What it does
+
+Right-click the tray icon for:
+
+| Menu item | Effect |
+|---|---|
+| **Run firmware / driver test** | Resolves the driver transport and performs a no-op set; reports PASS/FAIL. |
+| **Hold CURRENT** (120–175 W) | Turns ASUS Dynamic Boost off, sets the enforced GPU power limit, and re-asserts it every 5 minutes and on power/resume events. |
+| **Set MAX ceiling (reboot)** | Writes a persistent ceiling override to the NVIDIA driver registry key. Takes effect after reboot. |
+| **Stop holding** | Stops re-asserting the CURRENT value. |
+| **Restore defaults** | Removes the MAX override, sets CURRENT back to stock 95 W and re-enables Dynamic Boost (95 + 25 W). |
+
+Dynamic Boost must stay **off** for a raised CURRENT limit to hold; the tool handles this for you.
+
+## Requirements
+
+- Windows 11 x64, administrator rights (the manifest requests elevation)
+- NVIDIA driver with `nvapi64.dll`
+- ASUS ATK ACPI driver (installed with Armoury Crate / ASUS System Control Interface)
+- .NET 9 SDK to build
+
+## Build
+
+```
+dotnet build -c Release
+```
+
+The executable is written to `bin/Release/NvTgpHold.exe`.
+
+## Uninstall / revert
+
+Use **Restore defaults**, then reboot. Closing the tool stops the hold; the MAX override persists in
+the registry until removed by **Restore defaults**.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). All changes go through pull requests and require the
+maintainer's approval before merging.
+
+## License
+
+[MIT](LICENSE)

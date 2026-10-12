@@ -21,7 +21,7 @@ that raises and holds the NVIDIA GPU's power limit above the stock platform cap.
 
 ## What it does
 
-Right-click the tray icon for:
+Right-click the tray icon for the options below. See the [usage guide](docs/Usage.md) for details.
 
 | Menu item | Effect |
 |---|---|
@@ -37,7 +37,7 @@ Dynamic Boost must stay **off** for a raised CURRENT limit to hold; the tool han
 
 Get the latest `NvTgpHold-vX.Y.Z-win-x64.zip` from the [Releases](../../releases) page, check its
 SHA-256 against the release notes, extract it and run `NvTgpHold.exe`. Full guide in the
-[wiki](../../wiki).
+[docs](docs/README.md) (also mirrored to the [wiki](../../wiki)).
 
 ## Requirements
 

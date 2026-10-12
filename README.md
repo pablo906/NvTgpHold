@@ -33,9 +33,16 @@ Right-click the tray icon for:
 
 Dynamic Boost must stay **off** for a raised CURRENT limit to hold; the tool handles this for you.
 
+## Download
+
+Get the latest `NvTgpHold-vX.Y.Z-win-x64.zip` from the [Releases](../../releases) page, check its
+SHA-256 against the release notes, extract it and run `NvTgpHold.exe`. Full guide in the
+[wiki](../../wiki).
+
 ## Requirements
 
 - Windows 11 x64, administrator rights (the manifest requests elevation)
+- [.NET 9 Desktop Runtime (x64)](https://dotnet.microsoft.com/download/dotnet/9.0)
 - NVIDIA driver with `nvapi64.dll`
 - ASUS ATK ACPI driver (installed with Armoury Crate / ASUS System Control Interface)
 - .NET 9 SDK to build

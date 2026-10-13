@@ -8,7 +8,8 @@ namespace NvTgpHold
 {
     // Lean, self-contained tray tool. Features:
     //  - Firmware/driver test: resolve the RM transport RVA + an E633 no-op (PASS/FAIL).
-    //  - Set MAX ceiling: persistent romOverride00 (reuses the baked shadow offset), reboot to apply.
+    //  - Load vBIOS dump / Read vBIOS (nvflash): resolve the Board-Power MAX shadow offset from the vBIOS, cache it.
+    //  - Set MAX ceiling: persistent romOverride00 at that offset, reboot to apply (prompts for a vBIOS dump if none is loaded).
     //  - Set + hold CURRENT: single E633 value, re-asserted on a relaxed 5-min cadence + on transitions.
     //  - Restore defaults: remove MAX override + set CURRENT to stock 95 (re-enable boost in G-Helper for 95+25).
     //  NOTE: Dynamic Boost must be OFF for a raised CURRENT to hold (boost-ON re-advertises over it).
@@ -51,6 +52,8 @@ namespace NvTgpHold
             m.Items.Add(_status);
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add(new ToolStripMenuItem("Run firmware / driver test", null, (s, e) => RunTest()));
+            m.Items.Add(new ToolStripMenuItem("Load vBIOS dump...", null, (s, e) => LoadVbiosDump()));
+            m.Items.Add(new ToolStripMenuItem("Read vBIOS (nvflash)", null, (s, e) => ReadVbiosNvflash()));
             _holdMenu = new ToolStripMenuItem("Hold CURRENT");
             foreach (int w in Presets) { int ww = w; _holdMenu.DropDownItems.Add(new ToolStripMenuItem(w + " W", null, (s, e) => DoHold(ww))); }
             m.Items.Add(_holdMenu);
@@ -94,8 +97,8 @@ namespace NvTgpHold
             bool transportOk; string detail;
             if (noopMw > 0) transportOk = ApplyCurrent((int)Math.Round(enf), out detail); // no-op: re-set current value
             else { using (var nv = new NvApiSession()) { if (!nv.Open(out string e2)) { transportOk = false; detail = e2; } else transportOk = TransportResolver.TryResolve(nv.ImplPath, out _rva, out detail); } }
-            bool maxReady = RegMax.ReadShadowOffset().HasValue;
-            string verdict = "Driver/transport: " + (transportOk ? "PASS" : "FAIL") + "  |  MAX: " + (maxReady ? "ready" : "not ready (set once via NvpwrControl)");
+            bool maxReady = ShadowOffsets.Known(out string vb).HasValue;
+            string verdict = "Driver/transport: " + (transportOk ? "PASS" : "FAIL") + "  |  MAX: " + (maxReady ? "ready (" + vb + ")" : "not ready (load a vBIOS dump)");
             _last = verdict;
             Balloon(verdict + "\n" + detail);
             Refresh();
@@ -122,9 +125,50 @@ namespace NvTgpHold
             Refresh();
         }
 
+        private const string GpuzHelp =
+            "To save a vBIOS dump with GPU-Z:\n" +
+            "1. Run GPU-Z as administrator with the NVIDIA GPU selected (Standard/Ultimate GPU mode, not Eco).\n" +
+            "2. Click the share icon (arrow out of a box) right of 'BIOS Version'.\n" +
+            "3. Choose 'Save to file...' and save the .rom.\n\n" +
+            "The dump is only read. NvTgpHold never writes to the vBIOS.";
+
+        private static bool PickAndLoadVbios(string intro)
+        {
+            if (MessageBox.Show(intro + "\n\n" + GpuzHelp + "\n\nSelect the .rom file now?", "NvTgpHold - vBIOS dump",
+                    MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return false;
+            using (var dlg = new OpenFileDialog { Title = "Select vBIOS dump", Filter = "vBIOS dump (*.rom;*.bin)|*.rom;*.bin|All files (*.*)|*.*" })
+            {
+                if (dlg.ShowDialog() != DialogResult.OK) return false;
+                bool ok = ShadowOffsets.ResolveFromFile(dlg.FileName, out string detail);
+                _last = ok ? "vBIOS loaded" : "vBIOS load failed";
+                MessageBox.Show((ok ? "vBIOS read. MAX can now be set.\n\n" : "Could not use this vBIOS dump:\n\n") + detail,
+                    "NvTgpHold", MessageBoxButtons.OK, ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+                Refresh();
+                return ok;
+            }
+        }
+
+        private static void LoadVbiosDump() => PickAndLoadVbios("Load a dump of this GPU's vBIOS so NvTgpHold can find the MAX power field.");
+
+        private static void ReadVbiosNvflash()
+        {
+            _last = "reading vBIOS (nvflash)..."; Refresh();
+            bool ok = ShadowOffsets.ResolveWithNvflash(out string detail);
+            _last = ok ? "vBIOS read (nvflash)" : "vBIOS read failed";
+            Balloon((ok ? "vBIOS read. MAX can now be set.\n" : "") + detail);
+            Refresh();
+        }
+
         private static void DoSetMax(int watts)
         {
-            bool ok = RegMax.SetMax(watts, out string msg);
+            int? shadow = ShadowOffsets.Known(out _);
+            if (!shadow.HasValue)
+            {
+                if (!PickAndLoadVbios("Setting MAX needs this GPU's vBIOS once, to find where the MAX power field is.")) { _last = "MAX not set (no vBIOS loaded)"; Refresh(); return; }
+                shadow = ShadowOffsets.Known(out _);
+                if (!shadow.HasValue) return;
+            }
+            bool ok = RegMax.SetMax(watts, shadow.Value, out string msg);
             if (ok) { _maxTargetW = watts; _last = "MAX " + watts + " W saved - REBOOT"; }
             else _last = "MAX failed: " + msg;
             Balloon(msg);

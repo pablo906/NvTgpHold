@@ -27,7 +27,9 @@ Right-click the tray icon for the options below. See the [usage guide](docs/Usag
 |---|---|
 | **Run firmware / driver test** | Resolves the driver transport and performs a no-op set; reports PASS/FAIL. |
 | **Hold CURRENT** (120–175 W) | Turns ASUS Dynamic Boost off, sets the enforced GPU power limit, and re-asserts it every 5 minutes and on power/resume events. |
-| **Set MAX ceiling (reboot)** | Writes a persistent ceiling override to the NVIDIA driver registry key. Takes effect after reboot. |
+| **Load vBIOS dump...** | Reads a vBIOS dump (for example saved with GPU-Z) and finds the MAX power field. Read-only, needed once. |
+| **Read vBIOS (nvflash)** | Same, but reads the vBIOS directly with `nvflash64.exe` (not included). |
+| **Set MAX ceiling (reboot)** | Writes a persistent ceiling override to the NVIDIA driver registry key at that field. Asks for a vBIOS dump if none is loaded. Takes effect after reboot. |
 | **Stop holding** | Stops re-asserting the CURRENT value. |
 | **Restore defaults** | Removes the MAX override, sets CURRENT back to stock 95 W and re-enables Dynamic Boost (95 + 25 W). |
 

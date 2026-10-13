@@ -168,7 +168,6 @@ namespace NvTgpHold
     internal static class RegMax
     {
         private const string ClassRoot = @"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
-        private static readonly string ShadowCache = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "shadow-offset.txt");
 
         private static RegistryKey OpenGpuKey(bool writable, out string err)
         {
@@ -197,23 +196,6 @@ namespace NvTgpHold
             return null;
         }
 
-        public static int? ReadShadowOffset()
-        {
-            try
-            {
-                using (var k = OpenGpuKey(false, out _))
-                    if (k?.GetValue("romOverride00") is byte[] b && b.Length >= 9)
-                    {
-                        int off = BitConverter.ToInt32(b, 5);
-                        try { File.WriteAllText(ShadowCache, off.ToString(CultureInfo.InvariantCulture)); } catch { }
-                        return off;
-                    }
-            }
-            catch { }
-            try { if (File.Exists(ShadowCache) && int.TryParse(File.ReadAllText(ShadowCache).Trim(), out int c)) return c; } catch { }
-            return null;
-        }
-
         private static byte[] BuildOverride(int watts, int shadow)
         {
             byte[] a = new byte[14];
@@ -223,18 +205,18 @@ namespace NvTgpHold
             return a;
         }
 
-        public static bool SetMax(int watts, out string msg)
+        public static bool SetMax(int watts, int shadow, out string msg)
         {
             msg = "";
-            int? shadow = ReadShadowOffset();
-            if (!shadow.HasValue) { msg = "No existing romOverride00/cached shadow offset. Set MAX once with NvpwrControl first."; return false; }
             try
             {
                 using (var k = OpenGpuKey(true, out string err))
                 {
                     if (k == null) { msg = err; return false; }
-                    k.SetValue("romOverride00", BuildOverride(watts, shadow.Value), RegistryValueKind.Binary);
-                    msg = "MAX " + watts + " W written. Reboot to apply.";
+                    byte[] blob = BuildOverride(watts, shadow);
+                    k.SetValue("romOverride00", blob, RegistryValueKind.Binary);
+                    if (!(k.GetValue("romOverride00") is byte[] rb) || !rb.AsSpan().SequenceEqual(blob)) { msg = "romOverride00 readback mismatch"; return false; }
+                    msg = "MAX " + watts + " W written (offset 0x" + shadow.ToString("X") + "). Reboot to apply.";
                     return true;
                 }
             }

@@ -37,9 +37,9 @@ enforced value as a harmless no-op. Result example:
 `Driver/transport: PASS | MAX: ready`
 
 - **Driver/transport PASS**: holding CURRENT will work.
-- **MAX ready**: this machine already has a MAX override the tool can adjust (see below).
-- **MAX not ready**: you can still hold CURRENT up to the existing MAX, but *Set MAX ceiling* is
-  unavailable until a one-time MAX override exists.
+- **MAX ready**: the tool already knows where the MAX field is in this GPU's vBIOS.
+- **MAX not ready**: you can still hold CURRENT up to the existing MAX. Load a vBIOS dump once
+  (see below) before using *Set MAX ceiling*.
 
 Run this first after installing, and again after every NVIDIA driver update.
 
@@ -54,14 +54,30 @@ The chosen value gets a check mark in the submenu. The hold lasts until you pick
 *Restore defaults*, or exit the tool. It does **not** survive a reboot unless the tool is started
 again (see [Installation](Installation.md) for auto-start).
 
-### Set MAX ceiling (reboot) → 120 ... 175 W
-Writes a persistent MAX override to the NVIDIA driver's registry key. **Nothing changes until you
-reboot.** After rebooting, the status line should show the new `max`.
+### Load vBIOS dump...
+Reads a saved copy of your GPU's vBIOS (`.rom`) and finds the Board-Power MAX field in it. The
+file is only read; nothing is flashed. The result is remembered per vBIOS version in
+`%ProgramData%\NvTgpHold\vbios-offsets.txt`, so you only do this once (again only after a vBIOS
+update). This is the recommended way to get MAX ready.
 
-The override reuses a value from an existing override on this machine. If the test says
-*MAX: not ready*, this option fails with a message explaining that a MAX has to be set once with
-another tool first. After that one-time setup the tool remembers the value (in
-`shadow-offset.txt` next to the exe), so keep the tool in a folder it can write to.
+**Saving a vBIOS dump with GPU-Z**
+1. Download [GPU-Z](https://www.techpowerup.com/gpuz/) and run it as administrator.
+2. Make sure the NVIDIA GPU is active (Standard or Ultimate GPU mode, not Eco) and selected in the
+   drop-down at the bottom.
+3. Click the share icon (arrow out of a box) right of **BIOS Version** and choose **Save to file...**.
+4. In NvTgpHold choose **Load vBIOS dump...** and pick that file.
+
+### Read vBIOS (nvflash)
+Does the same as *Load vBIOS dump*, but reads the vBIOS directly with NVIDIA's `nvflash64.exe`
+(read-only `--save`). NvTgpHold does not include nvflash: put `nvflash64.exe` next to
+`NvTgpHold.exe` (or in a `tools` subfolder, `C:\NVFlash`, or on `PATH`).
+
+### Set MAX ceiling (reboot) → 120 ... 175 W
+Writes a persistent MAX override (`romOverride00`) to the NVIDIA driver's registry key, at the
+MAX field found in your vBIOS. **Nothing changes until you reboot.** After rebooting, the status
+line should show the new `max`.
+
+If no vBIOS has been loaded yet, this option asks for a vBIOS dump first, then sets MAX.
 
 ### Stop holding
 Stops re-applying CURRENT. The current value stays until the driver or platform changes it,
@@ -79,7 +95,7 @@ reboot.
 
 1. Plug in the charger and check the [Windows power settings](#recommended-windows-power-settings) below.
 2. **Run firmware / driver test**, confirm PASS.
-3. If needed, **Set MAX ceiling** to a modest value such as 130 W and reboot.
+3. If needed, **Set MAX ceiling** (the first time it asks for a vBIOS dump) to a modest value such as 130 W and reboot.
 4. **Hold CURRENT** at or below MAX.
 5. Run a sustained GPU load (a game or benchmark for 10+ minutes) and watch temperatures and
    board power in HWiNFO or GPU-Z (see [Safety](Safety.md)).

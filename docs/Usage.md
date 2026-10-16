@@ -47,8 +47,11 @@ Run this first after installing, and again after every NVIDIA driver update.
 1. Refuses if the target is above the live MAX and tells you to raise MAX first.
 2. Turns ASUS Dynamic Boost **off**.
 3. Sets the enforced limit to the chosen value.
-4. Keeps holding it: re-applies every **5 minutes**, after plugging in or unplugging, after
-   sleep/resume, and after unlocking Windows.
+4. Keeps holding it: checks the enforced limit every **3 seconds** and re-applies it as soon as
+   something pulls it down. It also re-applies every 5 minutes, after plugging in or unplugging,
+   after sleep/resume, and after unlocking Windows. The status line shows when it last had to
+   re-apply and how many times (`dropped to 120 W, #3 14:02:11`), which tells you how often
+   something else is overriding it.
 
 The chosen value gets a check mark in the submenu. The hold lasts until you pick *Stop holding*,
 *Restore defaults*, or exit the tool. It does **not** survive a reboot unless the tool is started
@@ -106,7 +109,7 @@ reboot.
 
 Those tools can apply their own GPU limits and Dynamic Boost settings on mode changes, which
 fight the hold. Either close them while holding, or make sure they don't change GPU power
-settings. NvTgpHold re-asserts on its 5-minute cycle, but there can be a short gap.
+settings. NvTgpHold notices a drop within about 3 seconds and puts the limit back, so there can be a short gap.
 
 ## Battery
 

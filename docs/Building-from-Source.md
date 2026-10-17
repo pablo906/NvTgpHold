@@ -6,3 +6,7 @@
    dotnet build -c Release
    ```
 3. Output is in `bin/Release/`. Run `NvTgpHold.exe` as administrator.
+4. Optional: run the hardware-free tests (they also run on Linux or macOS):
+   ```
+   dotnet test tests/NvTgpHold.Tests
+   ```

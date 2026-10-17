@@ -101,11 +101,15 @@ parts, the same two G-Helper shows:
 | `0x00120099` | Fixed base | Read-only. BIOS 310 on the GA403WW always reports 80 W. |
 | `0x00120098` | Variable part, added to the base | G-Helper's GPU power setting. The BIOS profiles set it to 0, 5 or 15 W. |
 
-This option sets the variable part to `hold - base`, capped at `MAX - base` and never below 0 (the
-same bounds G-Helper uses, with Dynamic Boost off). Holding 140 W on a GA403WW gives `80+60 W`.
-After every write the tool reads the value back, and the status line says `sync failed` if the
-BIOS rejected it or the read-back doesn't match. Uncheck it to leave the value alone. *Restore
-defaults* sets the variable part back to 0, the value the stock BIOS profile uses.
+This option sets the variable part to `hold - base` (Dynamic Boost is off while holding). Holding
+140 W on a GA403WW gives `80+60 W`. A hold that would need a variable part outside `0` to
+`MAX - base` (the same range G-Helper's slider allows) is not written, and the status line says
+why. After every write the tool reads the value back, and the status line says `sync failed` if
+the BIOS rejected it or the read-back doesn't match.
+
+The tool remembers the variable part from before its first write (for example G-Helper's 70 W)
+and puts it back when you uncheck this option, pick *Stop holding*, or exit. *Restore defaults*
+sets it to 0 instead, the value the stock BIOS profile uses.
 
 ### Stop holding
 Stops re-applying CURRENT. The current value stays until the driver or platform changes it,

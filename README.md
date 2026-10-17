@@ -27,7 +27,7 @@ Right-click the tray icon for the options below. See the [usage guide](docs/Usag
 |---|---|
 | **Run firmware / driver test** | Resolves the driver transport and performs a no-op set; reports PASS/FAIL. |
 | **Hold CURRENT** (120–250 W) | Turns ASUS Dynamic Boost off, sets the enforced GPU power limit, and re-applies it within about 3 seconds whenever something pulls it down (plus every 5 minutes and on power/resume events). |
-| **Sync NVPCF TGP to hold** | On by default. Sets the variable part of the ASUS/NVPCF GPU power (ATK `0x00120098`, G-Helper's GPU power setting) so that fixed base (`0x00120099`) + variable equals the hold target, verifies it by reading it back, and puts it back if something changes it. |
+| **Sync NVPCF TGP to hold** | On by default. Sets the variable part of the ASUS/NVPCF GPU power (ATK `0x00120098`, G-Helper's GPU power setting) so that fixed base (`0x00120099`) + variable equals the hold target, verifies it by reading it back, and puts it back if something changes it. The previous value is restored on stop, uncheck or exit. |
 | **Load vBIOS dump...** | Reads a vBIOS dump (for example saved with GPU-Z) and finds the MAX power field. Read-only, needed once. |
 | **Read vBIOS (nvflash)** | Same, but reads the vBIOS directly with `nvflash64.exe` (not included). |
 | **Set MAX ceiling (reboot)** | Writes a persistent ceiling override to the NVIDIA driver registry key at that field. Asks for a vBIOS dump if none is loaded. Takes effect after reboot. |
@@ -57,6 +57,8 @@ dotnet build -c Release
 ```
 
 The executable is written to `bin/Release/NvTgpHold.exe`.
+
+Hardware-free tests for the NVPCF TGP arithmetic: `dotnet test tests/NvTgpHold.Tests`.
 
 ## Uninstall / revert
 

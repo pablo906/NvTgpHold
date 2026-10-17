@@ -68,7 +68,8 @@ namespace NvTgpHold
 
         private static int ReadDsts(uint device)
         {
-            if (!Call(Dsts, device, 0u, out uint r, out _) || (r & 0x10000u) == 0) return -1;
+            // A simple value comes back as 0x0001xxxx; anything else (e.g. 0xFFFFFFFE = unsupported) is not a wattage.
+            if (!Call(Dsts, device, 0u, out uint r, out _) || (r & 0xFFFF0000u) != 0x00010000u) return -1;
             return (int)(r & 0xFFFFu);
         }
     }

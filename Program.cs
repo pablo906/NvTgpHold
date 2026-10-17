@@ -24,7 +24,7 @@ namespace NvTgpHold
         private static string _last = "idle";
         private static DateTime _lastReassert = DateTime.MinValue;
         private static int _drifts = 0;
-        private static readonly int[] Presets = { 120, 130, 140, 150, 160, 175 };
+        private static readonly int[] Presets = { 120, 130, 140, 150, 160, 175, 200, 225, 250 };
         private const int StockCurrentW = 95;
         private static ToolStripMenuItem _status, _holdMenu, _maxMenu;
 

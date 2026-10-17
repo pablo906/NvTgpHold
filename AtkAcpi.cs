@@ -7,11 +7,13 @@ namespace NvTgpHold
 {
     // ASUS ATK ACPI calls (DEVS = set, DSTS = read) via the ATKACPI driver. Verified working on GA403WW.
     //  - 0x001200C0: Dynamic Boost (reused verbatim from GpuPowerSlider\Backend.cs). SetBoost(0) = OFF, SetBoost(25) = default ON.
-    //  - 0x00120098: NVPCF base TGP. BIOS 310 stores DEVS value * 8 into \_SB.NPCF.ACBT (the base TGP NVPCF reads back
-    //    through _DSM func 2) and notifies NPCF; DSTS returns ACBT / 8 | 0x10000. Stock map (SPDM) sets ACBT = 0.
+    //  - 0x00120099: fixed GPU base power. BIOS 310 DSTS returns the constant 80 (0x50 | 0x10000); there is no DEVS.
+    //  - 0x00120098: variable GPU power added on top of 0x99 (G-Helper's GPU_POWER; it shows total = 0x99 + 0x98).
+    //    DEVS stores value * 8 into \_SB.NPCF.ACBT, which NVPCF reads back as TGPA through _DSM func 2, and notifies
+    //    NPCF; DSTS returns ACBT / 8 | 0x10000. The BIOS profiles write ACBT 0 / 5 / 15 W, so it is the additional part.
     internal static class AtkAcpi
     {
-        private const uint BoostId = 0x001200C0u, BaseTgpId = 0x00120098u;
+        private const uint BoostId = 0x001200C0u, GpuPowerId = 0x00120098u, GpuBaseId = 0x00120099u;
         private const uint Devs = 0x53564544u, Dsts = 0x53545344u; // "DEVS", "DSTS"
 
         [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -49,18 +51,24 @@ namespace NvTgpHold
             return true;
         }
 
-        public static bool SetBaseTgp(int watts, out string detail)
+        // Sets the variable component (0x98) only. The total NVPCF sees is ReadGpuBase() + watts.
+        public static bool SetGpuPower(int watts, out string detail)
         {
-            if (!Call(Devs, BaseTgpId, (uint)watts, out uint r, out detail)) return false;
-            if (r != 1) { detail = "ASUS rejected the base TGP request"; return false; }
-            detail = "base=" + watts + "W";
+            if (!Call(Devs, GpuPowerId, (uint)watts, out uint r, out detail)) return false;
+            if (r != 1) { detail = "ASUS rejected the GPU power request"; return false; }
+            detail = "additional=" + watts + "W";
             return true;
         }
 
-        // Returns the NVPCF base TGP in watts, or -1 if it can't be read.
-        public static int ReadBaseTgp()
+        // Variable component (0x98) in watts, or -1 if it can't be read.
+        public static int ReadGpuPower() => ReadDsts(GpuPowerId);
+
+        // Fixed base component (0x99) in watts, or -1 if it can't be read.
+        public static int ReadGpuBase() => ReadDsts(GpuBaseId);
+
+        private static int ReadDsts(uint device)
         {
-            if (!Call(Dsts, BaseTgpId, 0u, out uint r, out _) || (r & 0x10000u) == 0) return -1;
+            if (!Call(Dsts, device, 0u, out uint r, out _) || (r & 0x10000u) == 0) return -1;
             return (int)(r & 0xFFFFu);
         }
     }

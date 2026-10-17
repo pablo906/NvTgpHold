@@ -27,12 +27,12 @@ Right-click the tray icon for the options below. See the [usage guide](docs/Usag
 |---|---|
 | **Run firmware / driver test** | Resolves the driver transport and performs a no-op set; reports PASS/FAIL. |
 | **Hold CURRENT** (120–250 W) | Turns ASUS Dynamic Boost off, sets the enforced GPU power limit, and re-applies it within about 3 seconds whenever something pulls it down (plus every 5 minutes and on power/resume events). |
-| **Sync NVPCF base to hold** | On by default. Also sets the ASUS/NVPCF base TGP (ATK `0x00120098`, the value G-Helper's GPU power setting writes) to the hold target, and puts it back if something changes it. |
+| **Sync NVPCF TGP to hold** | On by default. Sets the variable part of the ASUS/NVPCF GPU power (ATK `0x00120098`, G-Helper's GPU power setting) so that fixed base (`0x00120099`) + variable equals the hold target, verifies it by reading it back, and puts it back if something changes it. |
 | **Load vBIOS dump...** | Reads a vBIOS dump (for example saved with GPU-Z) and finds the MAX power field. Read-only, needed once. |
 | **Read vBIOS (nvflash)** | Same, but reads the vBIOS directly with `nvflash64.exe` (not included). |
 | **Set MAX ceiling (reboot)** | Writes a persistent ceiling override to the NVIDIA driver registry key at that field. Asks for a vBIOS dump if none is loaded. Takes effect after reboot. |
 | **Stop holding** | Stops re-asserting the CURRENT value. |
-| **Restore defaults** | Removes the MAX override, sets CURRENT back to stock 95 W, sets the NVPCF base back to 0 and re-enables Dynamic Boost (95 + 25 W). |
+| **Restore defaults** | Removes the MAX override, sets CURRENT back to stock 95 W, sets the NVPCF variable GPU power back to 0 and re-enables Dynamic Boost (95 + 25 W). |
 
 Dynamic Boost must stay **off** for a raised CURRENT limit to hold; the tool handles this for you.
 

@@ -154,10 +154,10 @@ namespace NvTgpHold
                     string o = p.StandardOutput.ReadToEnd(); p.WaitForExit(5000);
                     var parts = o.Split('\n')[0].Split(',');
                     if (parts.Length < 4) return false;
-                    double.TryParse(parts[0].Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out enf);
-                    double.TryParse(parts[1].Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out max);
-                    double.TryParse(parts[2].Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out draw);
-                    double.TryParse(parts[3].Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out util);
+                    if (!double.TryParse(parts[0].Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out enf)) enf = double.NaN;
+                    if (!double.TryParse(parts[1].Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out max)) max = double.NaN;
+                    if (!double.TryParse(parts[2].Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out draw)) draw = double.NaN;
+                    if (!double.TryParse(parts[3].Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out util)) util = double.NaN;
                     return !double.IsNaN(enf);
                 }
             }

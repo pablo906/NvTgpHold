@@ -111,6 +111,13 @@ The tool remembers the variable part from before its first write (for example G-
 and puts it back when you uncheck this option, pick *Stop holding*, or exit. *Restore defaults*
 sets it to 0 instead, the value the stock BIOS profile uses.
 
+### Keep Dynamic Boost on (+25 W)
+Off by default. When checked, a hold leaves ASUS Dynamic Boost **on** at 25 W instead of turning
+it off, and the NVPCF variable part becomes `hold - base - 25` (so holding 150 W gives
+`80+45 W +25 boost`, and 175 W gives `80+70 W +25 boost`). Turning boost on makes the platform reset
+the enforced limit to 95 + 25 W; the hold notices within about 3 seconds and re-applies your
+target, so with this option the status line's re-assert count shows how often that happens.
+
 ### Stop holding
 Stops re-applying CURRENT. The current value stays until the driver or platform changes it,
 which usually happens at the next power event. Dynamic Boost stays off.

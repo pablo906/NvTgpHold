@@ -23,26 +23,50 @@ namespace NvTgpHold.Tests
         [InlineData(80, 80, 175, 0)]
         [InlineData(140, 80, -1, 60)]   // MAX unknown: no upper bound
         public void Additional_is_target_minus_base(int target, int fixedBase, int max, int expected)
-            => Assert.Equal(expected, TgpSync.Additional(target, fixedBase, max, out _));
+            => Assert.Equal(expected, TgpSync.Additional(target, fixedBase, 0, max, out _));
+
+        [Theory]
+        [InlineData(150, 45)]   // 80 + 45 + 25 boost
+        [InlineData(175, 70)]   // 80 + 70 + 25 boost
+        [InlineData(105, 0)]
+        public void Additional_subtracts_boost(int target, int expected)
+            => Assert.Equal(expected, TgpSync.Additional(target, 80, 25, 175, out _));
+
+        [Fact]
+        public void Additional_with_boost_rejects_above_range_and_below_base()
+        {
+            Assert.Equal(-1, TgpSync.Additional(200, 80, 25, 175, out string above));   // needs +95, supported +70
+            Assert.Contains("+70", above);
+            Assert.Equal(-1, TgpSync.Additional(100, 80, 25, 175, out _));
+        }
+
+        [Fact]
+        public void Apply_with_boost_reports_three_parts()
+        {
+            var atk = new FakeAtk();
+            Assert.True(TgpSync.Apply(150, 25, 175, atk.ReadBase, atk.ReadPower, atk.Write, out string note));
+            Assert.Equal(new[] { 45 }, atk.Writes);
+            Assert.Equal("synced 80+45 W +25 boost", note);
+        }
 
         [Fact]
         public void Additional_rejects_above_supported_range()
         {
             // MAX 150 with an 80 W base supports +70; 175 would need +95.
-            Assert.Equal(-1, TgpSync.Additional(175, 80, 150, out string error));
+            Assert.Equal(-1, TgpSync.Additional(175, 80, 0, 150, out string error));
             Assert.Contains("+70", error);
         }
 
         [Fact]
         public void Additional_rejects_underflow()
         {
-            Assert.Equal(-1, TgpSync.Additional(60, 80, 175, out string error));
+            Assert.Equal(-1, TgpSync.Additional(60, 80, 0, 175, out string error));
             Assert.Contains("below", error);
         }
 
         [Fact]
         public void Additional_rejects_unreadable_base()
-            => Assert.Equal(-1, TgpSync.Additional(140, -1, 175, out _));
+            => Assert.Equal(-1, TgpSync.Additional(140, -1, 0, 175, out _));
 
         [Theory]
         [InlineData(0x00010050u, 80)]
@@ -57,7 +81,7 @@ namespace NvTgpHold.Tests
         public void Apply_writes_and_verifies()
         {
             var atk = new FakeAtk();
-            Assert.True(TgpSync.Apply(140, 175, atk.ReadBase, atk.ReadPower, atk.Write, out string note));
+            Assert.True(TgpSync.Apply(140, 0, 175, atk.ReadBase, atk.ReadPower, atk.Write, out string note));
             Assert.Equal(new[] { 60 }, atk.Writes);
             Assert.Equal("synced 80+60 W", note);
         }
@@ -66,7 +90,7 @@ namespace NvTgpHold.Tests
         public void Apply_skips_write_when_already_in_sync()
         {
             var atk = new FakeAtk { Power = 60 };
-            Assert.True(TgpSync.Apply(140, 175, atk.ReadBase, atk.ReadPower, atk.Write, out _));
+            Assert.True(TgpSync.Apply(140, 0, 175, atk.ReadBase, atk.ReadPower, atk.Write, out _));
             Assert.Empty(atk.Writes);
         }
 
@@ -74,7 +98,7 @@ namespace NvTgpHold.Tests
         public void Apply_fails_on_readback_mismatch()
         {
             var atk = new FakeAtk { ReadbackOverride = 70 };
-            Assert.False(TgpSync.Apply(140, 175, atk.ReadBase, atk.ReadPower, atk.Write, out string note));
+            Assert.False(TgpSync.Apply(140, 0, 175, atk.ReadBase, atk.ReadPower, atk.Write, out string note));
             Assert.Contains("wrote 60 W, reads 70 W", note);
         }
 
@@ -82,7 +106,7 @@ namespace NvTgpHold.Tests
         public void Apply_fails_on_unreadable_readback()
         {
             var atk = new FakeAtk { ReadbackOverride = -1 };
-            Assert.False(TgpSync.Apply(140, 175, atk.ReadBase, atk.ReadPower, atk.Write, out string note));
+            Assert.False(TgpSync.Apply(140, 0, 175, atk.ReadBase, atk.ReadPower, atk.Write, out string note));
             Assert.Contains("reads ?", note);
         }
 
@@ -90,7 +114,7 @@ namespace NvTgpHold.Tests
         public void Apply_reports_rejected_write()
         {
             var atk = new FakeAtk { Reject = "ASUS rejected the GPU power request" };
-            Assert.False(TgpSync.Apply(140, 175, atk.ReadBase, atk.ReadPower, atk.Write, out string note));
+            Assert.False(TgpSync.Apply(140, 0, 175, atk.ReadBase, atk.ReadPower, atk.Write, out string note));
             Assert.Contains("ASUS rejected", note);
         }
 
@@ -98,9 +122,9 @@ namespace NvTgpHold.Tests
         public void Apply_does_not_write_when_out_of_range_or_base_invalid()
         {
             var atk = new FakeAtk();
-            Assert.False(TgpSync.Apply(175, 150, atk.ReadBase, atk.ReadPower, atk.Write, out _));
+            Assert.False(TgpSync.Apply(175, 0, 150, atk.ReadBase, atk.ReadPower, atk.Write, out _));
             atk.Base = -1;
-            Assert.False(TgpSync.Apply(140, 175, atk.ReadBase, atk.ReadPower, atk.Write, out _));
+            Assert.False(TgpSync.Apply(140, 0, 175, atk.ReadBase, atk.ReadPower, atk.Write, out _));
             Assert.Empty(atk.Writes);
         }
 

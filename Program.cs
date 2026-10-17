@@ -241,9 +241,13 @@ namespace NvTgpHold
             PowerProbe.Read(out _enf, out _max, out _draw, out _);
             _gpuBase = AtkAcpi.ReadGpuBase();
             _gpuPower = AtkAcpi.ReadGpuPower();
+            // While either read fails nothing can be written, so say so instead of leaving an old "in sync" up; the
+            // 3 s poll picks the reads back up and the check below re-syncs once they are readable.
+            if (_syncTgp && _holdTargetW > 0 && (_gpuBase < 0 || _gpuPower < 0))
+                _sync = "sync unavailable: can't read NVPCF " + (_gpuBase < 0 ? "base (0x99)" : "power (0x98)");
             // NVPCF TGP changed under us (G-Helper's GPU power setting, an EC profile switch): put it back.
             // At most once per 10 s so a write the BIOS rejects doesn't re-notify NVPCF every poll.
-            if (_syncTgp && _holdTargetW > 0 && _gpuPower != TgpSync.Additional(_holdTargetW, _gpuBase, HoldBoost, MaxW, out _) && (DateTime.UtcNow - _lastSync).TotalSeconds >= 10)
+            else if (_syncTgp && _holdTargetW > 0 && (_gpuPower != TgpSync.Additional(_holdTargetW, _gpuBase, HoldBoost, MaxW, out _) || _sync.StartsWith("sync unavailable", StringComparison.Ordinal)) && (DateTime.UtcNow - _lastSync).TotalSeconds >= 10)
                 SyncTgp("was " + (_gpuPower < 0 ? "?" : _gpuPower + " W") + " " + DateTime.Now.ToString("HH:mm:ss"));
             // Something else (driver, EC, ASUS services) pulled the enforced limit down: put it back now rather than
             // waiting for the 5-min tick. At most once per 2 s so a write that won't stick doesn't spin.

@@ -43,12 +43,15 @@ enforced value as a harmless no-op. Result example:
 
 Run this first after installing, and again after every NVIDIA driver update.
 
-### Hold CURRENT → 120 / 130 / 140 / 150 / 160 / 175 W
+### Hold CURRENT → 120 / 130 / 140 / 150 / 160 / 175 / 200 / 225 / 250 W
 1. Refuses if the target is above the live MAX and tells you to raise MAX first.
 2. Turns ASUS Dynamic Boost **off**.
 3. Sets the enforced limit to the chosen value.
-4. Keeps holding it: re-applies every **5 minutes**, after plugging in or unplugging, after
-   sleep/resume, and after unlocking Windows.
+4. Keeps holding it: checks the enforced limit every **3 seconds** and re-applies it as soon as
+   something pulls it down. It also re-applies every 5 minutes, after plugging in or unplugging,
+   after sleep/resume, and after unlocking Windows. The status line shows when it last had to
+   re-apply and how many times (`dropped to 120 W, #3 14:02:11`), which tells you how often
+   something else is overriding it.
 
 The chosen value gets a check mark in the submenu. The hold lasts until you pick *Stop holding*,
 *Restore defaults*, or exit the tool. It does **not** survive a reboot unless the tool is started
@@ -72,12 +75,16 @@ Does the same as *Load vBIOS dump*, but reads the vBIOS directly with NVIDIA's `
 (read-only `--save`). NvTgpHold does not include nvflash: put `nvflash64.exe` next to
 `NvTgpHold.exe` (or in a `tools` subfolder, `C:\NVFlash`, or on `PATH`).
 
-### Set MAX ceiling (reboot) → 120 ... 175 W
+### Set MAX ceiling (reboot) → 120 ... 250 W
 Writes a persistent MAX override (`romOverride00`) to the NVIDIA driver's registry key, at the
 MAX field found in your vBIOS. **Nothing changes until you reboot.** After rebooting, the status
 line should show the new `max`.
 
 If no vBIOS has been loaded yet, this option asks for a vBIOS dump first, then sets MAX.
+
+The 200, 225 and 250 W steps are for GPUs whose stock MAX is already 175 W (for example
+Strix models). Don't go far above what your laptop's cooling and power adapter are built for;
+see [Safety](Safety.md).
 
 ### Stop holding
 Stops re-applying CURRENT. The current value stays until the driver or platform changes it,
@@ -106,7 +113,7 @@ reboot.
 
 Those tools can apply their own GPU limits and Dynamic Boost settings on mode changes, which
 fight the hold. Either close them while holding, or make sure they don't change GPU power
-settings. NvTgpHold re-asserts on its 5-minute cycle, but there can be a short gap.
+settings. NvTgpHold notices a drop within about 3 seconds and puts the limit back, so there can be a short gap.
 
 ## Battery
 

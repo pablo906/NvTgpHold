@@ -10,7 +10,8 @@ namespace NvTgpHold
     //  - Firmware/driver test: resolve the RM transport RVA + an E633 no-op (PASS/FAIL).
     //  - Load vBIOS dump / Read vBIOS (nvflash): resolve the Board-Power MAX shadow offset from the vBIOS, cache it.
     //  - Set MAX ceiling: persistent romOverride00 at that offset, reboot to apply (prompts for a vBIOS dump if none is loaded).
-    //  - Set + hold CURRENT: single E633 value, re-asserted on a relaxed 5-min cadence + on transitions.
+    //  - Set + hold CURRENT: single E633 value, re-asserted as soon as the 3 s status poll sees it dropped,
+    //    plus a 5-min safety re-assert and on power/resume transitions.
     //  - Restore defaults: remove MAX override + set CURRENT to stock 95 (re-enable boost in G-Helper for 95+25).
     //  NOTE: Dynamic Boost must be OFF for a raised CURRENT to hold (boost-ON re-advertises over it).
     internal static class Program
@@ -21,7 +22,9 @@ namespace NvTgpHold
         private static long _rva = 0; private static string _impl = "";
         private static double _enf = double.NaN, _max = double.NaN, _draw = double.NaN;
         private static string _last = "idle";
-        private static readonly int[] Presets = { 120, 130, 140, 150, 160, 175 };
+        private static DateTime _lastReassert = DateTime.MinValue;
+        private static int _drifts = 0;
+        private static readonly int[] Presets = { 120, 130, 140, 150, 160, 175, 200, 225, 250 };
         private const int StockCurrentW = 95;
         private static ToolStripMenuItem _status, _holdMenu, _maxMenu;
 
@@ -110,7 +113,7 @@ namespace NvTgpHold
             AtkAcpi.SetBoost(0, out string boostDetail);   // Dynamic Boost OFF so the platform stops re-advertising over the hold
             System.Threading.Thread.Sleep(250);            // let the boost-toggle notify settle before E633 (matches GpuPowerSlider)
             bool ok = ApplyCurrent(watts, out string detail);
-            if (ok) { _holdTargetW = watts; _holdTimer.Start(); _last = "holding " + watts + " W (boost off: " + boostDetail + ")"; }
+            if (ok) { _holdTargetW = watts; _drifts = 0; _lastReassert = DateTime.UtcNow; _holdTimer.Start(); _last = "holding " + watts + " W (boost off: " + boostDetail + ")"; }
             else { _last = "set failed: " + detail + " | boost: " + boostDetail; Balloon(detail + "\nboost: " + boostDetail); }
             Refresh();
         }
@@ -118,6 +121,7 @@ namespace NvTgpHold
         private static void Reassert(string why)
         {
             if (_holdTargetW <= 0) return;
+            _lastReassert = DateTime.UtcNow;
             AtkAcpi.SetBoost(0, out _);
             System.Threading.Thread.Sleep(250);
             bool ok = ApplyCurrent(_holdTargetW, out string detail);
@@ -189,6 +193,22 @@ namespace NvTgpHold
         private static void Refresh()
         {
             PowerProbe.Read(out _enf, out _max, out _draw, out _);
+            // Something else (driver, EC, ASUS services) pulled the enforced limit down: put it back now rather than
+            // waiting for the 5-min tick. At most once per 2 s so a write that won't stick doesn't spin.
+            if (_holdTargetW > 0 && !double.IsNaN(_enf) && _enf < _holdTargetW - 1 && (DateTime.UtcNow - _lastReassert).TotalSeconds >= 2)
+            {
+                if (!double.IsNaN(_max) && _max + 0.01 < _holdTargetW)
+                {
+                    _last = "live MAX is " + _max.ToString("0", CultureInfo.InvariantCulture) + " W, below the hold - set MAX and reboot";
+                    _lastReassert = DateTime.UtcNow.AddSeconds(60);
+                }
+                else
+                {
+                    _drifts++;
+                    Reassert("dropped to " + _enf.ToString("0", CultureInfo.InvariantCulture) + " W, #" + _drifts + " " + DateTime.Now.ToString("HH:mm:ss"));
+                    return;
+                }
+            }
             string enf = double.IsNaN(_enf) ? "?" : _enf.ToString("0.0", CultureInfo.InvariantCulture);
             string mx = double.IsNaN(_max) ? "?" : _max.ToString("0", CultureInfo.InvariantCulture);
             string hold = _holdTargetW > 0 ? ("HOLD " + _holdTargetW + " W") : "hold off";

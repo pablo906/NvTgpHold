@@ -12,6 +12,8 @@ namespace NvTgpHold
     //  - Set MAX ceiling: persistent romOverride00 at that offset, reboot to apply (prompts for a vBIOS dump if none is loaded).
     //  - Set + hold CURRENT: single E633 value, re-asserted as soon as the 3 s status poll sees it dropped,
     //    plus a 5-min safety re-assert and on power/resume transitions.
+    //  - Sync NVPCF base (default on): while holding, also set the ASUS/NVPCF base TGP to the hold target and put it
+    //    back if anything (G-Helper, an EC profile switch) changes it, so NVPCF isn't told a base far below the hold.
     //  - Restore defaults: remove MAX override + set CURRENT to stock 95 (re-enable boost in G-Helper for 95+25).
     //  NOTE: Dynamic Boost must be OFF for a raised CURRENT to hold (boost-ON re-advertises over it).
     internal static class Program
@@ -24,9 +26,11 @@ namespace NvTgpHold
         private static string _last = "idle";
         private static DateTime _lastReassert = DateTime.MinValue;
         private static int _drifts = 0;
+        private static bool _syncBase = true;
+        private static int _base = -1;
         private static readonly int[] Presets = { 120, 130, 140, 150, 160, 175, 200, 225, 250 };
         private const int StockCurrentW = 95;
-        private static ToolStripMenuItem _status, _holdMenu, _maxMenu;
+        private static ToolStripMenuItem _status, _holdMenu, _maxMenu, _syncMenu;
 
         [STAThread]
         private static void Main()
@@ -63,6 +67,9 @@ namespace NvTgpHold
             _maxMenu = new ToolStripMenuItem("Set MAX ceiling (reboot)");
             foreach (int w in Presets) { int ww = w; _maxMenu.DropDownItems.Add(new ToolStripMenuItem(w + " W", null, (s, e) => DoSetMax(ww))); }
             m.Items.Add(_maxMenu);
+            _syncMenu = new ToolStripMenuItem("Sync NVPCF base to hold") { Checked = _syncBase, CheckOnClick = true };
+            _syncMenu.CheckedChanged += (s, e) => { _syncBase = _syncMenu.Checked; if (_syncBase && _holdTargetW > 0) SyncBase("enabled"); Refresh(); };
+            m.Items.Add(_syncMenu);
             m.Items.Add(new ToolStripMenuItem("Stop holding", null, (s, e) => { _holdTargetW = 0; _holdTimer.Stop(); _last = "hold released"; Refresh(); }));
             m.Items.Add(new ToolStripMenuItem("Restore defaults (95 + 25 stock)", null, (s, e) => DoRestore()));
             m.Items.Add(new ToolStripSeparator());
@@ -92,6 +99,15 @@ namespace NvTgpHold
             catch (Exception ex) { detail = "exception: " + ex.Message; return false; }
         }
 
+        // Writes the NVPCF base TGP (ATK 0x00120098) to the hold target. Returns a short note for the status line.
+        private static string SyncBase(string why)
+        {
+            if (!_syncBase || _holdTargetW <= 0) return "";
+            bool ok = AtkAcpi.SetBaseTgp(_holdTargetW, out string detail);
+            _base = AtkAcpi.ReadBaseTgp();
+            return ok ? ("base " + _holdTargetW + " W (" + why + ")") : ("base failed: " + detail);
+        }
+
         private static void RunTest()
         {
             _last = "testing..."; Refresh();
@@ -113,7 +129,7 @@ namespace NvTgpHold
             AtkAcpi.SetBoost(0, out string boostDetail);   // Dynamic Boost OFF so the platform stops re-advertising over the hold
             System.Threading.Thread.Sleep(250);            // let the boost-toggle notify settle before E633 (matches GpuPowerSlider)
             bool ok = ApplyCurrent(watts, out string detail);
-            if (ok) { _holdTargetW = watts; _drifts = 0; _lastReassert = DateTime.UtcNow; _holdTimer.Start(); _last = "holding " + watts + " W (boost off: " + boostDetail + ")"; }
+            if (ok) { _holdTargetW = watts; _drifts = 0; _lastReassert = DateTime.UtcNow; _holdTimer.Start(); string b = SyncBase("hold"); _last = "holding " + watts + " W (boost off: " + boostDetail + ")" + (b.Length > 0 ? ", " + b : ""); }
             else { _last = "set failed: " + detail + " | boost: " + boostDetail; Balloon(detail + "\nboost: " + boostDetail); }
             Refresh();
         }
@@ -123,6 +139,7 @@ namespace NvTgpHold
             if (_holdTargetW <= 0) return;
             _lastReassert = DateTime.UtcNow;
             AtkAcpi.SetBoost(0, out _);
+            SyncBase(why);
             System.Threading.Thread.Sleep(250);
             bool ok = ApplyCurrent(_holdTargetW, out string detail);
             _last = ok ? ("re-asserted " + _holdTargetW + " W (" + why + ")") : ("re-assert failed (" + why + "): " + detail);
@@ -185,6 +202,8 @@ namespace NvTgpHold
             RegMax.RemoveMax(out string rm);
             ApplyCurrent(StockCurrentW, out string rc);
             AtkAcpi.SetBoost(25, out string rb);   // re-enable Dynamic Boost -> stock 95 + 25
+            AtkAcpi.SetBaseTgp(0, out _);          // stock NVPCF map (SPDM) uses base 0
+            _base = AtkAcpi.ReadBaseTgp();
             _last = "restored to stock 95+25 (reboot to drop MAX)";
             Balloon("MAX: " + rm + "\nCURRENT->95: " + rc + "\nBoost->25 (on): " + rb);
             Refresh();
@@ -193,6 +212,10 @@ namespace NvTgpHold
         private static void Refresh()
         {
             PowerProbe.Read(out _enf, out _max, out _draw, out _);
+            _base = AtkAcpi.ReadBaseTgp();
+            // Base TGP changed under us (G-Helper's GPU power setting, an EC profile switch): put it back.
+            if (_syncBase && _holdTargetW > 0 && _base >= 0 && _base != _holdTargetW)
+                _last = SyncBase("was " + _base + " W " + DateTime.Now.ToString("HH:mm:ss"));
             // Something else (driver, EC, ASUS services) pulled the enforced limit down: put it back now rather than
             // waiting for the 5-min tick. At most once per 2 s so a write that won't stick doesn't spin.
             if (_holdTargetW > 0 && !double.IsNaN(_enf) && _enf < _holdTargetW - 1 && (DateTime.UtcNow - _lastReassert).TotalSeconds >= 2)
@@ -212,7 +235,8 @@ namespace NvTgpHold
             string enf = double.IsNaN(_enf) ? "?" : _enf.ToString("0.0", CultureInfo.InvariantCulture);
             string mx = double.IsNaN(_max) ? "?" : _max.ToString("0", CultureInfo.InvariantCulture);
             string hold = _holdTargetW > 0 ? ("HOLD " + _holdTargetW + " W") : "hold off";
-            if (_status != null) _status.Text = hold + "  |  enf " + enf + " / max " + mx + " W  |  " + _last;
+            string bs = _base >= 0 ? _base.ToString(CultureInfo.InvariantCulture) : "?";
+            if (_status != null) _status.Text = hold + "  |  enf " + enf + " / max " + mx + " W  |  base " + bs + " W  |  " + _last;
             if (_holdMenu != null) foreach (ToolStripMenuItem it in _holdMenu.DropDownItems) it.Checked = (_holdTargetW > 0 && it.Text == _holdTargetW + " W");
             if (_maxMenu != null) foreach (ToolStripMenuItem it in _maxMenu.DropDownItems) it.Checked = (_maxTargetW > 0 && it.Text == _maxTargetW + " W");
             if (_tray != null) { string t = (_holdTargetW > 0 ? ("Hold " + _holdTargetW + "W ") : "NvTgpHold ") + "enf " + enf; _tray.Text = t.Length > 63 ? t.Substring(0, 63) : t; }

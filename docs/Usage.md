@@ -52,6 +52,9 @@ Run this first after installing, and again after every NVIDIA driver update.
    after sleep/resume, and after unlocking Windows. The status line shows when it last had to
    re-apply and how many times (`dropped to 120 W, #3 14:02:11`), which tells you how often
    something else is overriding it.
+5. If **Sync NVPCF base to hold** is checked (the default), also sets the ASUS/NVPCF base TGP to
+   the same value and puts it back whenever something else changes it (for example G-Helper's GPU
+   power setting, or the laptop switching power profile). The status line shows it as `base 140 W`.
 
 The chosen value gets a check mark in the submenu. The hold lasts until you pick *Stop holding*,
 *Restore defaults*, or exit the tool. It does **not** survive a reboot unless the tool is started
@@ -86,13 +89,21 @@ The 200, 225 and 250 W steps are for GPUs whose stock MAX is already 175 W (for 
 Strix models). Don't go far above what your laptop's cooling and power adapter are built for;
 see [Safety](Safety.md).
 
+### Sync NVPCF base to hold
+On by default. NVIDIA's platform controller (NVPCF) reads a base TGP from the BIOS, and tools such
+as G-Helper can change it (G-Helper's GPU power setting writes it directly). When that base is far
+below the held limit, NVPCF sees the GPU running well above what the platform says it should. This
+option keeps the base equal to your hold target using the same ASUS setting G-Helper uses (ATK ID
+`0x00120098`). Uncheck it to leave the base alone. *Restore defaults* sets the base back to 0,
+the value the stock BIOS profile uses.
+
 ### Stop holding
 Stops re-applying CURRENT. The current value stays until the driver or platform changes it,
 which usually happens at the next power event. Dynamic Boost stays off.
 
 ### Restore defaults (95 + 25 stock)
-Stops the hold, removes the MAX override, sets CURRENT back to 95 W and turns Dynamic Boost back
-on (95 + 25 W). **Reboot** to fully return MAX to the factory value.
+Stops the hold, removes the MAX override, sets CURRENT back to 95 W, sets the NVPCF base back
+to 0 and turns Dynamic Boost back on (95 + 25 W). **Reboot** to fully return MAX to the factory value.
 
 ### Exit
 Closes the tool. The hold stops; whatever limit is active stays until the next power event or

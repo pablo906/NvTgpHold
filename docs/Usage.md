@@ -43,7 +43,7 @@ enforced value as a harmless no-op. Result example:
 
 Run this first after installing, and again after every NVIDIA driver update.
 
-### Hold CURRENT → 120 / 130 / 140 / 150 / 160 / 175 W
+### Hold CURRENT → 120 / 130 / 140 / 150 / 160 / 175 / 200 / 225 / 250 W
 1. Refuses if the target is above the live MAX and tells you to raise MAX first.
 2. Turns ASUS Dynamic Boost **off**.
 3. Sets the enforced limit to the chosen value.
@@ -75,12 +75,16 @@ Does the same as *Load vBIOS dump*, but reads the vBIOS directly with NVIDIA's `
 (read-only `--save`). NvTgpHold does not include nvflash: put `nvflash64.exe` next to
 `NvTgpHold.exe` (or in a `tools` subfolder, `C:\NVFlash`, or on `PATH`).
 
-### Set MAX ceiling (reboot) → 120 ... 175 W
+### Set MAX ceiling (reboot) → 120 ... 250 W
 Writes a persistent MAX override (`romOverride00`) to the NVIDIA driver's registry key, at the
 MAX field found in your vBIOS. **Nothing changes until you reboot.** After rebooting, the status
 line should show the new `max`.
 
 If no vBIOS has been loaded yet, this option asks for a vBIOS dump first, then sets MAX.
+
+The 200, 225 and 250 W steps are for GPUs whose stock MAX is already 175 W (for example
+Strix models). Don't go far above what your laptop's cooling and power adapter are built for;
+see [Safety](Safety.md).
 
 ### Stop holding
 Stops re-applying CURRENT. The current value stays until the driver or platform changes it,

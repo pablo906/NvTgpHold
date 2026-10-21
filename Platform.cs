@@ -45,13 +45,14 @@ namespace NvTgpHold
     }
 
     // Windows "Processor performance boost mode" (PERFBOOSTMODE) on the active power plan, AC and DC.
-    // 3 = Efficient Enabled. The value found before the first change is restored on Off/exit.
+    // 3 = Efficient Enabled. The values found before the first change to each plan are restored to that plan on Off/exit,
+    // so a plan switch while a profile is on doesn't leave the first plan changed or copy its values into another.
     internal static class BoostMode
     {
         public const uint EfficientEnabled = 3;
         private static Guid _sub = new Guid("54533251-82be-4824-96c1-47b60b740d00");      // GUID_PROCESSOR_SETTINGS_SUBGROUP
         private static Guid _setting = new Guid("be337238-0d82-4146-a960-4f3749d470c7");  // PERFBOOSTMODE
-        private static int _priorAc = -1, _priorDc = -1;
+        private static readonly System.Collections.Generic.Dictionary<Guid, (uint Ac, uint Dc)> _prior = new System.Collections.Generic.Dictionary<Guid, (uint Ac, uint Dc)>();
 
         [DllImport("powrprof.dll")] private static extern uint PowerGetActiveScheme(IntPtr root, out IntPtr scheme);
         [DllImport("powrprof.dll")] private static extern uint PowerReadACValueIndex(IntPtr root, ref Guid scheme, ref Guid sub, ref Guid setting, out uint value);
@@ -68,13 +69,6 @@ namespace NvTgpHold
             try { scheme = Marshal.PtrToStructure<Guid>(p); return true; } finally { LocalFree(p); }
         }
 
-        // Current AC value, or -1.
-        public static int Read()
-        {
-            try { return Active(out Guid s) && PowerReadACValueIndex(IntPtr.Zero, ref s, ref _sub, ref _setting, out uint v) == 0 ? (int)v : -1; }
-            catch { return -1; }
-        }
-
         // Writes AC+DC only when they differ, so the loop doesn't re-activate the plan every tick.
         public static bool Set(uint value, out string detail)
         {
@@ -85,7 +79,7 @@ namespace NvTgpHold
                 PowerReadACValueIndex(IntPtr.Zero, ref s, ref _sub, ref _setting, out uint ac);
                 PowerReadDCValueIndex(IntPtr.Zero, ref s, ref _sub, ref _setting, out uint dc);
                 if (ac == value && dc == value) { detail = "boost mode " + value; return true; }
-                if (_priorAc < 0) { _priorAc = (int)ac; _priorDc = (int)dc; }
+                if (!_prior.ContainsKey(s)) _prior[s] = (ac, dc);
                 uint e1 = PowerWriteACValueIndex(IntPtr.Zero, ref s, ref _sub, ref _setting, value);
                 uint e2 = PowerWriteDCValueIndex(IntPtr.Zero, ref s, ref _sub, ref _setting, value);
                 uint e3 = PowerSetActiveScheme(IntPtr.Zero, ref s);
@@ -98,14 +92,18 @@ namespace NvTgpHold
 
         public static void RestorePrior()
         {
-            if (_priorAc < 0) return;
+            if (_prior.Count == 0) return;
             try
             {
-                if (!Active(out Guid s)) return;
-                PowerWriteACValueIndex(IntPtr.Zero, ref s, ref _sub, ref _setting, (uint)_priorAc);
-                PowerWriteDCValueIndex(IntPtr.Zero, ref s, ref _sub, ref _setting, (uint)_priorDc);
-                PowerSetActiveScheme(IntPtr.Zero, ref s);
-                _priorAc = _priorDc = -1;
+                bool haveActive = Active(out Guid active);
+                foreach (var kv in _prior)
+                {
+                    Guid s = kv.Key;
+                    PowerWriteACValueIndex(IntPtr.Zero, ref s, ref _sub, ref _setting, kv.Value.Ac);
+                    PowerWriteDCValueIndex(IntPtr.Zero, ref s, ref _sub, ref _setting, kv.Value.Dc);
+                }
+                if (haveActive) PowerSetActiveScheme(IntPtr.Zero, ref active);   // re-apply whichever plan is active now
+                _prior.Clear();
             }
             catch { }
         }

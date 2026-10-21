@@ -76,8 +76,9 @@ namespace NvTgpHold
             try
             {
                 if (!Active(out Guid s)) { detail = "no active power plan"; return false; }
-                PowerReadACValueIndex(IntPtr.Zero, ref s, ref _sub, ref _setting, out uint ac);
-                PowerReadDCValueIndex(IntPtr.Zero, ref s, ref _sub, ref _setting, out uint dc);
+                // A failed read must not be saved as the prior value (0 = boost Disabled).
+                if (PowerReadACValueIndex(IntPtr.Zero, ref s, ref _sub, ref _setting, out uint ac) != 0 ||
+                    PowerReadDCValueIndex(IntPtr.Zero, ref s, ref _sub, ref _setting, out uint dc) != 0) { detail = "boost mode read failed"; return false; }
                 if (ac == value && dc == value) { detail = "boost mode " + value; return true; }
                 if (!_prior.ContainsKey(s)) _prior[s] = (ac, dc);
                 uint e1 = PowerWriteACValueIndex(IntPtr.Zero, ref s, ref _sub, ref _setting, value);

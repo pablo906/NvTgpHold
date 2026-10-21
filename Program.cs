@@ -327,9 +327,10 @@ namespace NvTgpHold
 
         private const string AutoTip =
             "Re-sends the GPU hold and the CPU profile every few seconds, even when no drop is seen.\n" +
-            "This smooths short dips. It does NOT beat a sustained over-threshold event: in the 2026-10-20 capture the\n" +
-            "platform forced the GPU to 95 W (boost stripped) after ~50 s of heavy load and re-asserts did not win it back,\n" +
-            "and the EC re-steps the CPU ladder every tick while the trigger stays over threshold.";
+            "GPU: smooths short dips only. In the 2026-10-20 capture the platform forced the GPU to 95 W (boost stripped)\n" +
+            "after ~50 s of heavy load and re-asserts did not win it back until the load ended.\n" +
+            "CPU: the EC only re-sends its CPU limit when the value changes, so at steady load the re-applied profile should\n" +
+            "stick; on load changes the EC steps again and the next tick puts the profile back.";
 
         private static void Refresh()
         {

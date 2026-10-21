@@ -131,11 +131,17 @@ the tool re-sends the hold and the CPU profile on a timer, whether or not it saw
 
 The status line shows `every 2 s, auto #57 14:02:11 GPU ok CPU ok`.
 
-**What it can and can't do.** It smooths short dips between the EC's and the driver's writes.
-It does **not** beat a sustained over-threshold event. In the 2026-10-20 capture the platform forced
-the GPU to 95 W (boost stripped) after about 50 s of heavy load and re-asserts did not win it back
-until the load ended, and the EC re-steps the CPU ladder on every tick while its trigger stays
-over threshold. The menu item's tooltip says the same.
+**What it can and can't do.**
+
+- **GPU**: it smooths short dips. It does **not** beat a sustained over-threshold event. In the
+  2026-10-20 capture the platform forced the GPU to 95 W (boost stripped) after about 50 s of heavy
+  load and re-asserts did not win it back until the load ended.
+- **CPU**: the EC only sends a CPU limit to the SMU when the value it wants changes (it compares
+  against its last-sent copy), so at a steady load, with the ladder parked, the re-applied profile
+  should stick. On a load change the EC steps again and the next tick puts the profile back.
+  Not yet confirmed on hardware.
+
+The menu item's tooltip says the same.
 
 ### Re-assert every → 1 s (minimum) / 2 s (default) / 3 / 5 / 10 / 30 s
 How often *Auto re-assert* fires. Why 2 s is the default and 1 s the floor:

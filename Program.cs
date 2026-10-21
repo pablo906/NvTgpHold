@@ -153,7 +153,9 @@ namespace NvTgpHold
         {
             if (!_syncTgp || _holdTargetW <= 0) return false;
             _lastSync = DateTime.UtcNow;
+            // Never write 0x98 before the value to restore is captured; a failed read here waits for the next poll.
             if (_priorPower < 0) _priorPower = AtkAcpi.ReadGpuPower();
+            if (_priorPower < 0) { _sync = "sync unavailable: can't read NVPCF power (0x98) to save it before writing"; return false; }
             bool ok = TgpSync.Apply(_holdTargetW, HoldBoost, MaxW, AtkAcpi.ReadGpuBase, AtkAcpi.ReadGpuPower, WriteGpuPower, out string note);
             _sync = ok && !note.StartsWith("in sync") ? note + " (" + why + ")" : note;
             _gpuBase = AtkAcpi.ReadGpuBase(); _gpuPower = AtkAcpi.ReadGpuPower();

@@ -1,6 +1,6 @@
 # Usage
 
-NvTgpHold lives in the system tray (shield icon). It has no main window; everything is in the
+NvTgpHold lives in the system tray (red-and-black badge with a GPU chip and lightning bolt). It has no main window; everything is in the
 right-click menu. Hovering the icon shows a short tooltip such as `Hold 140W enf 140.0`.
 
 ## Key terms
@@ -118,13 +118,73 @@ it off, and the NVPCF variable part becomes `hold - base - 25` (so holding 150 W
 the enforced limit to 95 + 25 W; the hold notices within about 3 seconds and re-applies your
 target, so with this option the status line's re-assert count shows how often that happens.
 
+### Auto re-assert in background
+Off by default; the choice is remembered in `%ProgramData%\NvTgpHold\settings.txt`. When checked,
+the tool re-sends the hold and the CPU profile on a timer, whether or not it saw anything drop:
+
+- **GPU**: the E633 call at the hold value. This is the same call the firmware test uses as a
+  no-op, so when nothing moved it changes nothing. The timer does **not** toggle Dynamic Boost or
+  write NVPCF, because both notify the NVIDIA driver (`Notify(NPCF, 0xC0)` in the BIOS). The 3 s
+  poll still re-syncs NVPCF and does the full re-assert when the enforced limit drops.
+  Skipped while the live MAX is below the hold.
+- **CPU**: the selected CPU profile (see below), if any.
+
+The status line shows `every 2 s, auto #57 14:02:11 GPU ok CPU ok`.
+
+**What it can and can't do.** It smooths short dips between the EC's and the driver's writes.
+It does **not** beat a sustained over-threshold event. In the 2026-10-20 capture the platform forced
+the GPU to 95 W (boost stripped) after about 50 s of heavy load and re-asserts did not win it back
+until the load ended, and the EC re-steps the CPU ladder on every tick while its trigger stays
+over threshold. The menu item's tooltip says the same.
+
+### Re-assert every → 1 s (minimum) / 2 s (default) / 3 / 5 / 10 / 30 s
+How often *Auto re-assert* fires. Why 2 s is the default and 1 s the floor:
+
+| Input | Value | Source |
+|---|---|---|
+| EC throttle tick | ~4–5 s; ladder down-steps seen 2–5 s apart under load | EC firmware decode (`0x3655C`, 2-tick recovery debounce) and the 2026-10-20 capture (26→19→13→6→5 W at 01:37:22/27/37/39/43 UTC) |
+| When the EC writes the CPU limit to the SMU | Only on a ladder step change (suppress flag `0x800A00` bit 6), not every tick | EC firmware, consumer `0x39214` |
+| Cost of one CPU write | 3 ATK calls; each runs `ALIB(0x0C)` and an AML `Sleep(20 ms)`, so ≥60 ms of ACPI time per round. No GPU notify. | BIOS 310 DSDT, `WMNB` DEVS `0x001200A0/A3/C1` |
+| Cost of one GPU write | One NvAPI session plus one RM control; the firmware test uses the same call as a no-op | `NvApi.cs` |
+| Rate limits | None in the AML (no counter or lockout); the SMU mailbox is shared with the EC's own writes | DSDT; EC firmware |
+
+At 2 s the EC's value stays in place for at most one host period after each EC step, which is
+shorter than one EC tick, so the host write lands before the EC can move again. Going faster
+gains nothing measurable, because the EC only changes the limit on a step. Below 1 s the ALIB
+calls take a growing share of ACPI time and contend with the EC's SMU mailbox traffic and with
+G-Helper if it runs, so 1 s is the floor.
+
+### CPU power (Strix Point) → Off / 28 W / 45 W / 65 W
+Shown only on AMD Strix Point CPUs (family 1Ah, models 0x20–0x2F, e.g. Ryzen AI 9 HX 370). Each
+profile sets the three CPU power limits through the ASUS ATK interface, the same calls G-Helper
+uses, fast first:
+
+| Profile | SPL (sustained, `0x001200A3`) | SPPT (slow, `0x001200A0`) | FPPT (fast, `0x001200C1`) |
+|---|---|---|---|
+| 28 W | 28 | 35 | 50 |
+| 45 W | 45 | 55 | 70 |
+| 65 W | 65 | 75 | 90 (the GA403WW Manual-mode default) |
+
+Picking a profile applies it once, and again after power and resume events. With *Auto re-assert*
+on it is re-applied every period, so the platform defaults can't stick after a throttle event.
+The SMU still clamps every value to the platform maximum.
+
+The BIOS can't report the CPU limits back (DSTS for these IDs always returns `0x10000`), so the
+tool can't verify a write or restore the values from before. **Off** stops writing; the last
+values stay until the next ASUS or G-Helper mode change.
+
+**Efficient Enabled boost mode** (on by default) sets Windows' *Processor performance boost mode*
+to *Efficient Enabled* on the active power plan, for both AC and battery. The previous mode is put
+back when you uncheck it, choose **Off**, use *Restore defaults*, or exit.
+
 ### Stop holding
 Stops re-applying CURRENT. The current value stays until the driver or platform changes it,
 which usually happens at the next power event. Dynamic Boost stays off.
 
 ### Restore defaults (95 + 25 stock)
 Stops the hold, removes the MAX override, sets CURRENT back to 95 W, sets the NVPCF variable GPU power back
-to 0 and turns Dynamic Boost back on (95 + 25 W). **Reboot** to fully return MAX to the factory value.
+to 0 and turns Dynamic Boost back on (95 + 25 W). It also turns the CPU profile off and restores the
+Windows boost mode. **Reboot** to fully return MAX to the factory value.
 
 ### Exit
 Closes the tool. The hold stops; whatever limit is active stays until the next power event or
@@ -146,6 +206,11 @@ reboot.
 Those tools can apply their own GPU limits and Dynamic Boost settings on mode changes, which
 fight the hold. Either close them while holding, or make sure they don't change GPU power
 settings. NvTgpHold notices a drop within about 3 seconds and puts the limit back, so there can be a short gap.
+
+NvTgpHold checks every 30 s whether G-Helper is running with **Auto apply** power limits on
+(`auto_apply_power_*` in `%APPDATA%\GHelper\config.json`). If it is, the status line shows
+`G-Helper auto-apply ON` and a notification asks you to turn it off or close G-Helper, because it
+re-writes the same CPU and GPU limits on every mode or power change.
 
 ## Battery
 

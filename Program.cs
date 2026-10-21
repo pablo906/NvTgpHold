@@ -15,6 +15,9 @@ namespace NvTgpHold
     //  - Sync NVPCF base (default on): while holding, also set the ASUS/NVPCF base TGP to the hold target and put it
     //    back if anything (G-Helper, an EC profile switch) changes it, so NVPCF isn't told a base far below the hold.
     //  - Restore defaults: remove MAX override + set CURRENT to stock 95 (re-enable boost in G-Helper for 95+25).
+    //  - Auto re-assert (opt-in): re-sends the hold's E633 and the CPU profile on a timer (default 2 s, floor 1 s),
+    //    whether or not a drop was seen. CPU profiles (Strix Point only) set SPL/SPPT/FPPT through ASUS ATK.
+    //  - Warns when G-Helper runs with auto_apply_power on, because it re-writes the same limits.
     //  NOTE: Dynamic Boost must be OFF for a raised CURRENT to hold (boost-ON re-advertises over it).
     internal static class Program
     {
@@ -35,14 +38,23 @@ namespace NvTgpHold
         private static int _priorPower = -1;                // 0x98 captured before the first sync write, restored on stop/disable/exit
         private static readonly int[] Presets = { 120, 130, 140, 150, 160, 175, 200, 225, 250 };
         private const int StockCurrentW = 95;
-        private static ToolStripMenuItem _status, _holdMenu, _maxMenu, _syncMenu;
+        private static ToolStripMenuItem _status, _holdMenu, _maxMenu, _syncMenu, _autoMenu, _intervalMenu, _cpuMenu;
+        private static System.Windows.Forms.Timer _autoTimer;
+        private static Settings _settings = new Settings();
+        private static CpuProfile _cpu;                     // active CPU profile, null = not asserting CPU limits
+        private static string _cpuNote = "", _autoNote = "", _ghelper = "";
+        private static int _autoTicks = 0;
+        private static DateTime _lastGhCheck = DateTime.MinValue;
+        private static bool _ghWarned = false;
 
         [STAThread]
         private static void Main()
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            _tray = new NotifyIcon { Icon = SystemIcons.Shield, Visible = true, Text = "NvTgpHold" };
+            CpuInfo.Detect();
+            _settings = SettingsStore.Load();
+            _tray = new NotifyIcon { Icon = AppIcon.Load(), Visible = true, Text = "NvTgpHold" };
             _tray.ContextMenuStrip = BuildMenu();
             _tray.DoubleClick += (s, e) => Refresh();
             _displayTimer = new System.Windows.Forms.Timer { Interval = 3000 };
@@ -50,16 +62,20 @@ namespace NvTgpHold
             _displayTimer.Start();
             _holdTimer = new System.Windows.Forms.Timer { Interval = 300000 };
             _holdTimer.Tick += (s, e) => { if (_holdTargetW > 0) Reassert("5-min"); };
-            SystemEvents.PowerModeChanged += (s, e) => { if (_holdTargetW > 0) Reassert("power " + e.Mode); };
-            SystemEvents.SessionSwitch += (s, e) => { if (_holdTargetW > 0 && e.Reason == SessionSwitchReason.SessionUnlock) Reassert("resume"); };
+            _autoTimer = new System.Windows.Forms.Timer { Interval = _settings.IntervalS * 1000 };
+            _autoTimer.Tick += (s, e) => AutoTick();
+            if (_settings.Auto) _autoTimer.Start();
+            SystemEvents.PowerModeChanged += (s, e) => { if (_holdTargetW > 0) Reassert("power " + e.Mode); ApplyCpu("power " + e.Mode); };
+            SystemEvents.SessionSwitch += (s, e) => { if (e.Reason != SessionSwitchReason.SessionUnlock) return; if (_holdTargetW > 0) Reassert("resume"); ApplyCpu("resume"); };
+            if (CpuInfo.StrixPoint && CpuProfiles.Find(_settings.CpuProfile) != null) SetCpuProfile(CpuProfiles.Find(_settings.CpuProfile));
             Refresh();
-            Application.ApplicationExit += (s, e) => { RestorePrior("exit"); if (_tray != null) _tray.Visible = false; };
+            Application.ApplicationExit += (s, e) => { RestorePrior("exit"); BoostMode.RestorePrior(); if (_tray != null) _tray.Visible = false; };
             Application.Run();
         }
 
         private static ContextMenuStrip BuildMenu()
         {
-            var m = new ContextMenuStrip();
+            var m = new ContextMenuStrip { ShowItemToolTips = true };
             _status = new ToolStripMenuItem("(status)") { Enabled = false };
             m.Items.Add(_status);
             m.Items.Add(new ToolStripSeparator());
@@ -78,6 +94,28 @@ namespace NvTgpHold
             var boostMenu = new ToolStripMenuItem("Keep Dynamic Boost on (+" + BoostW + " W)") { Checked = _keepBoost, CheckOnClick = true };
             boostMenu.CheckedChanged += (s, e) => { _keepBoost = boostMenu.Checked; if (_holdTargetW > 0) Reassert(_keepBoost ? "boost on" : "boost off"); else Refresh(); };
             m.Items.Add(boostMenu);
+            _autoMenu = new ToolStripMenuItem("Auto re-assert in background") { Checked = _settings.Auto, CheckOnClick = true, ToolTipText = AutoTip };
+            _autoMenu.CheckedChanged += (s, e) => { _settings.Auto = _autoMenu.Checked; SettingsStore.Save(_settings); if (_settings.Auto) { _autoTicks = 0; _autoTimer.Start(); AutoTick(); } else { _autoTimer.Stop(); _autoNote = ""; } Refresh(); };
+            m.Items.Add(_autoMenu);
+            _intervalMenu = new ToolStripMenuItem("Re-assert every");
+            foreach (int sec in ReassertInterval.Choices)
+            {
+                int ss = sec;
+                string label = sec + " s" + (sec == ReassertInterval.DefaultS ? " (default)" : sec == ReassertInterval.FloorS ? " (minimum)" : "");
+                _intervalMenu.DropDownItems.Add(new ToolStripMenuItem(label, null, (s, e) => { _settings.IntervalS = ReassertInterval.Clamp(ss); _autoTimer.Interval = _settings.IntervalS * 1000; SettingsStore.Save(_settings); Refresh(); }) { Tag = sec });
+            }
+            m.Items.Add(_intervalMenu);
+            if (CpuInfo.StrixPoint)
+            {
+                _cpuMenu = new ToolStripMenuItem("CPU power (Strix Point)");
+                _cpuMenu.DropDownItems.Add(new ToolStripMenuItem("Off (leave CPU limits alone)", null, (s, e) => SetCpuProfile(null)));
+                foreach (var p in CpuProfiles.Presets) { var pp = p; _cpuMenu.DropDownItems.Add(new ToolStripMenuItem(p.Label, null, (s, e) => SetCpuProfile(pp)) { Tag = p.Name }); }
+                _cpuMenu.DropDownItems.Add(new ToolStripSeparator());
+                var eff = new ToolStripMenuItem("Efficient Enabled boost mode") { Checked = _settings.EfficientBoost, CheckOnClick = true };
+                eff.CheckedChanged += (s, e) => { _settings.EfficientBoost = eff.Checked; SettingsStore.Save(_settings); if (!eff.Checked) BoostMode.RestorePrior(); ApplyCpu("boost mode"); Refresh(); };
+                _cpuMenu.DropDownItems.Add(eff);
+                m.Items.Add(_cpuMenu);
+            }
             m.Items.Add(new ToolStripMenuItem("Stop holding", null, (s, e) => { _holdTargetW = 0; _holdTimer.Stop(); RestorePrior("hold released"); _last = "hold released"; Refresh(); }));
             m.Items.Add(new ToolStripMenuItem("Restore defaults (95 + 25 stock)", null, (s, e) => DoRestore()));
             m.Items.Add(new ToolStripSeparator());
@@ -230,14 +268,72 @@ namespace NvTgpHold
             _gpuPower = AtkAcpi.ReadGpuPower();
             if (pw && _gpuPower != 0) rp = "wrote 0 W, reads " + (_gpuPower < 0 ? "?" : _gpuPower + " W");
             _priorPower = -1;   // Restore defaults means stock, not the pre-hold value
+            _cpu = null; _settings.CpuProfile = ""; SettingsStore.Save(_settings); BoostMode.RestorePrior(); _cpuNote = "";
             _sync = "";
             _last = "restored to stock 95+25 (reboot to drop MAX)";
             Balloon("MAX: " + rm + "\nCURRENT->95: " + rc + "\nBoost->25 (on): " + rb + "\nNVPCF additional->0: " + rp);
             Refresh();
         }
 
+        // Selecting a profile applies it once; with Auto re-assert on it is re-applied every tick. Off stops writing:
+        // the ATK readback is a constant, so the limits that were there before can't be put back, and stay until the
+        // next ASUS/G-Helper mode change.
+        private static void SetCpuProfile(CpuProfile p)
+        {
+            _cpu = p;
+            _settings.CpuProfile = p?.Name ?? "";
+            SettingsStore.Save(_settings);
+            if (p == null) { BoostMode.RestorePrior(); _cpuNote = "CPU off"; }
+            else ApplyCpu("profile");
+            Refresh();
+        }
+
+        private static bool ApplyCpu(string why)
+        {
+            if (_cpu == null || !CpuInfo.StrixPoint) return false;
+            bool ok = AtkAcpi.SetCpuPpt(_cpu.Spl, _cpu.Sppt, _cpu.Fppt, out string detail);
+            if (ok && _settings.EfficientBoost && !BoostMode.Set(BoostMode.EfficientEnabled, out string bm)) detail += ", " + bm;
+            _cpuNote = (ok ? detail : "CPU failed: " + detail) + " (" + why + ")";
+            return ok;
+        }
+
+        // Timer path: E633 at the hold value (the same call the firmware test uses as a no-op when nothing moved) and the
+        // CPU profile. No Dynamic Boost toggle or NVPCF write here, because those notify the NVIDIA driver; the 3 s poll
+        // already re-syncs NVPCF and does the full re-assert when the enforced limit drops.
+        private static void AutoTick()
+        {
+            if (!_settings.Auto) return;
+            _autoTicks++;
+            string gpu = "";
+            if (_holdTargetW > 0)
+            {
+                if (MaxW >= 0 && _holdTargetW > MaxW) gpu = "GPU skipped (MAX " + MaxW + " W)";
+                else gpu = ApplyCurrent(_holdTargetW, out string d) ? "GPU ok" : "GPU failed: " + d;
+            }
+            bool cpu = ApplyCpu("auto");
+            if (gpu.Length == 0 && _cpu == null) { _autoNote = "auto: nothing to hold"; return; }
+            _autoNote = "auto #" + _autoTicks + " " + DateTime.Now.ToString("HH:mm:ss") + (gpu.Length > 0 ? " " + gpu : "") + (_cpu != null ? (cpu ? " CPU ok" : " CPU failed") : "");
+        }
+
+        private static void CheckGHelper()
+        {
+            if ((DateTime.UtcNow - _lastGhCheck).TotalSeconds < 30) return;
+            _lastGhCheck = DateTime.UtcNow;
+            bool fights = GHelper.Fights(out string detail);
+            _ghelper = fights ? "G-Helper auto-apply ON" : "";
+            if (fights && !_ghWarned && (_holdTargetW > 0 || _cpu != null)) { _ghWarned = true; Balloon(detail); }
+            if (!fights) _ghWarned = false;
+        }
+
+        private const string AutoTip =
+            "Re-sends the GPU hold and the CPU profile every few seconds, even when no drop is seen.\n" +
+            "This smooths short dips. It does NOT beat a sustained over-threshold event: in the 2026-10-20 capture the\n" +
+            "platform forced the GPU to 95 W (boost stripped) after ~50 s of heavy load and re-asserts did not win it back,\n" +
+            "and the EC re-steps the CPU ladder every tick while the trigger stays over threshold.";
+
         private static void Refresh()
         {
+            CheckGHelper();
             PowerProbe.Read(out _enf, out _max, out _draw, out _);
             _gpuBase = AtkAcpi.ReadGpuBase();
             _gpuPower = AtkAcpi.ReadGpuPower();
@@ -269,7 +365,10 @@ namespace NvTgpHold
             string mx = double.IsNaN(_max) ? "?" : _max.ToString("0", CultureInfo.InvariantCulture);
             string hold = _holdTargetW > 0 ? ("HOLD " + _holdTargetW + " W") : "hold off";
             string nv = (_gpuBase >= 0 ? _gpuBase.ToString(CultureInfo.InvariantCulture) : "?") + "+" + (_gpuPower >= 0 ? _gpuPower.ToString(CultureInfo.InvariantCulture) : "?");
-            if (_status != null) _status.Text = hold + "  |  enf " + enf + " / max " + mx + " W  |  NVPCF " + nv + " W" + (_sync.Length > 0 ? " (" + _sync + ")" : "") + "  |  " + _last;
+            string extra = (_cpuNote.Length > 0 ? "  |  " + _cpuNote : "") + (_settings.Auto ? "  |  every " + _settings.IntervalS + " s" + (_autoNote.Length > 0 ? ", " + _autoNote : "") : "") + (_ghelper.Length > 0 ? "  |  " + _ghelper : "");
+            if (_status != null) _status.Text = hold + "  |  enf " + enf + " / max " + mx + " W  |  NVPCF " + nv + " W" + (_sync.Length > 0 ? " (" + _sync + ")" : "") + "  |  " + _last + extra;
+            if (_intervalMenu != null) foreach (ToolStripMenuItem it in _intervalMenu.DropDownItems) it.Checked = (int)it.Tag == _settings.IntervalS;
+            if (_cpuMenu != null) foreach (ToolStripItem it in _cpuMenu.DropDownItems) if (it is ToolStripMenuItem mi && !mi.CheckOnClick) mi.Checked = (mi.Tag as string) == (_cpu?.Name) || (mi.Tag == null && _cpu == null);
             if (_holdMenu != null) foreach (ToolStripMenuItem it in _holdMenu.DropDownItems) it.Checked = (_holdTargetW > 0 && it.Text == _holdTargetW + " W");
             if (_maxMenu != null) foreach (ToolStripMenuItem it in _maxMenu.DropDownItems) it.Checked = (_maxTargetW > 0 && it.Text == _maxTargetW + " W");
             if (_tray != null) { string t = (_holdTargetW > 0 ? ("Hold " + _holdTargetW + "W ") : "NvTgpHold ") + "enf " + enf; _tray.Text = t.Length > 63 ? t.Substring(0, 63) : t; }

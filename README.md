@@ -29,6 +29,8 @@ Right-click the tray icon for the options below. See the [usage guide](docs/Usag
 | **Hold CURRENT** (120–250 W) | Turns ASUS Dynamic Boost off, sets the enforced GPU power limit, and re-applies it within about 3 seconds whenever something pulls it down (plus every 5 minutes and on power/resume events). |
 | **Sync NVPCF TGP to hold** | On by default. Sets the variable part of the ASUS/NVPCF GPU power (ATK `0x00120098`, G-Helper's GPU power setting) so that fixed base (`0x00120099`) + variable equals the hold target, verifies it by reading it back, and puts it back if something changes it. The previous value is restored on stop, uncheck or exit. |
 | **Keep Dynamic Boost on** | Off by default. Holds with Dynamic Boost left on at 25 W and subtracts it from the NVPCF variable part (150 W = 80 + 45 + 25 boost). |
+| **Auto re-assert in background** | Off by default. Re-sends the GPU hold and the CPU profile every 2 s (configurable, 1 s minimum) even when no drop is seen. Smooths short dips; it does not beat a sustained over-threshold event. |
+| **CPU power (Strix Point)** | Only on AMD Strix Point. 28 / 45 / 65 W profiles (SPL / SPPT / FPPT) through ASUS ATK, plus Windows *Efficient Enabled* boost mode. |
 | **Load vBIOS dump...** | Reads a vBIOS dump (for example saved with GPU-Z) and finds the MAX power field. Read-only, needed once. |
 | **Read vBIOS (nvflash)** | Same, but reads the vBIOS directly with `nvflash64.exe` (not included). |
 | **Set MAX ceiling (reboot)** | Writes a persistent ceiling override to the NVIDIA driver registry key at that field. Asks for a vBIOS dump if none is loaded. Takes effect after reboot. |
@@ -36,6 +38,7 @@ Right-click the tray icon for the options below. See the [usage guide](docs/Usag
 | **Restore defaults** | Removes the MAX override, sets CURRENT back to stock 95 W, sets the NVPCF variable GPU power back to 0 and re-enables Dynamic Boost (95 + 25 W). |
 
 Dynamic Boost must stay **off** for a raised CURRENT limit to hold; the tool handles this for you.
+It warns when G-Helper runs with *Auto apply* power limits on, since that fights the hold.
 
 ## Download
 
@@ -59,7 +62,7 @@ dotnet build -c Release
 
 The executable is written to `bin/Release/NvTgpHold.exe`.
 
-Hardware-free tests for the NVPCF TGP arithmetic: `dotnet test tests/NvTgpHold.Tests`.
+Hardware-free tests for the NVPCF TGP arithmetic and the auto re-assert logic: `dotnet test tests/NvTgpHold.Tests`.
 
 ## Uninstall / revert
 

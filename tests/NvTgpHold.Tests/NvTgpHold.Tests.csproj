@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- Hardware-free tests for the NVPCF TGP arithmetic. Plain net9.0 so they run without Windows: dotnet test tests/NvTgpHold.Tests -->
+  <!-- Hardware-free tests for the NVPCF TGP arithmetic and the auto re-assert logic. Plain net9.0 so they run without Windows: dotnet test tests/NvTgpHold.Tests -->
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>
     <RollForward>Major</RollForward>
@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../TgpSync.cs" Link="TgpSync.cs" />
+    <Compile Include="../../AutoAssert.cs" Link="AutoAssert.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

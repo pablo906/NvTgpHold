@@ -12,10 +12,10 @@
 1. Open the repository's **Releases** page and download `NvTgpHold-vX.Y.Z-win-x64.zip`.
 2. Verify the SHA-256 listed in the release notes:
    ```powershell
-   Get-FileHash .\NvTgpHold-v1.0.1-win-x64.zip
+   Get-FileHash .\NvTgpHold-v1.1.1-win-x64.zip
    ```
-3. Extract the zip to a folder you control, e.g. `C:\Tools\NvTgpHold`. The tool saves a small settings file next to the exe, so the folder must be writable.
-4. Run `NvTgpHold.exe` and accept the UAC prompt. A shield icon appears in the tray.
+3. Extract the zip to a folder you control, e.g. `C:\Tools\NvTgpHold`. Settings and the vBIOS offset cache live in `%ProgramData%\NvTgpHold`.
+4. Run `NvTgpHold.exe` and accept the UAC prompt. The red-and-black NvTgpHold badge appears in the tray.
 
 Only download releases from this repository.
 

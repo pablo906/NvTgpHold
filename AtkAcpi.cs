@@ -11,9 +11,13 @@ namespace NvTgpHold
     //  - 0x00120098: variable GPU power added on top of 0x99 (G-Helper's GPU_POWER; it shows total = 0x99 + 0x98).
     //    DEVS stores value * 8 into \_SB.NPCF.ACBT, which NVPCF reads back as TGPA through _DSM func 2, and notifies
     //    NPCF; DSTS returns ACBT / 8 | 0x10000. The BIOS profiles write ACBT 0 / 5 / 15 W, so it is the additional part.
+    //  - 0x001200A3 / 0x001200A0 / 0x001200C1: CPU SPL / SPPT / FPPT (BIOS 310 DSDT, WMNB DEVS). Each sets M255 to the
+    //    AMD ALIB DPTC id (5 sustained, 7 slow, 6 fast), M256 = watts * 1000, calls ALIB(0x0C) and Sleeps 20 ms.
+    //    No GPU/NPCF notify. DSTS for these returns the constant 0x10000, so the applied CPU limit can't be read back.
     internal static class AtkAcpi
     {
         private const uint BoostId = 0x001200C0u, GpuPowerId = 0x00120098u, GpuBaseId = 0x00120099u;
+        private const uint CpuSplId = 0x001200A3u, CpuSpptId = 0x001200A0u, CpuFpptId = 0x001200C1u;
         private const uint Devs = 0x53564544u, Dsts = 0x53545344u; // "DEVS", "DSTS"
 
         [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -57,6 +61,19 @@ namespace NvTgpHold
             if (!Call(Devs, GpuPowerId, (uint)watts, out uint r, out detail)) return false;
             if (r != 1) { detail = "ASUS rejected the GPU power request"; return false; }
             detail = "additional=" + watts + "W";
+            return true;
+        }
+
+        // Writes FPPT, SPPT, then SPL (fast >= slow >= sustained is what the SMU expects). Fails on the first rejection.
+        public static bool SetCpuPpt(int spl, int sppt, int fppt, out string detail)
+        {
+            foreach (var (id, w, name) in new[] { (CpuFpptId, fppt, "FPPT"), (CpuSpptId, sppt, "SPPT"), (CpuSplId, spl, "SPL") })
+            {
+                if (w < CpuProfiles.MinW || w > CpuProfiles.MaxW) { detail = name + " " + w + " W outside " + CpuProfiles.MinW + "-" + CpuProfiles.MaxW + " W"; return false; }
+                if (!Call(Devs, id, (uint)w, out uint r, out detail)) return false;
+                if (r != 1) { detail = "ASUS rejected the CPU " + name + " request"; return false; }
+            }
+            detail = "CPU " + spl + "/" + sppt + "/" + fppt + " W";
             return true;
         }
 

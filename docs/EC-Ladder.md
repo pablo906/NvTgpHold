@@ -128,9 +128,15 @@ Transport: ASUS vendor commands over the ACPI EC ports, through PawnIO's signed 
   - writes only bytes that aren't already in the reset state, keeping writes to a minimum;
   - never reads an OBF byte it didn't ask for, and retries on timeout.
 
-  This narrows the window and detects most collisions after the fact. It does not eliminate them. A coordinated path
-  would mean issuing the transaction inside AML under `MUT0` through an ATK method, if one reaches `ECMD`; that's
-  still open.
+  This narrows the window and detects most collisions after the fact. It does not eliminate them.
+
+  **No coordinated route exists on BIOS 312.** We checked the DSDT and all SSDTs for an ATK/WMNB path that could
+  run the transaction inside ACPI.sys under `MUT0`:
+  - `ECMD(cmd)` only writes one command byte under `MUT0`. Its callers are `DNOT` (GPU D-notify) and AMD PEP `_DSM`.
+  - `ECM1(port, cmd, data)` is a generic writer with no mutex, called only from `UPHK` (PEP `_DSM`).
+  - WMNB's `RMEM` reads one byte of physical memory, and EC RAM outside the 0x800300 H2RAM page isn't mapped.
+
+  No AML issues 0x92/0x93. Fully coordinated options are a firmware change or a kernel driver.
 
   A tick is about 25 transactions from one process. An earlier test fired 70 back-to-back reads from 70 separate
   process launches, and that coincided with the EC's fan mode resetting, so keep EC access in one process at low

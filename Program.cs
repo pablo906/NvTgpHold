@@ -314,19 +314,31 @@ namespace NvTgpHold
         // The driver only reads romOverride00 when it shadows the vBIOS, so restarting the GPU device applies a MAX
         // change (set or removed) without a reboot. Same approach as mVolt+: none of our NVIDIA calls in flight during
         // the restart, then wait up to 30 s for a usable readback instead of a fixed delay.
+        // Runs the restart and the readback wait off the UI thread with a message pump, so the tray and the EC hold
+        // timer keep running while the device restarts (pnputil itself is bounded at 60 s, the readback at 30 s).
         private static bool RestartGpu(out double max, out string detail)
         {
             _last = "restarting GPU..."; Refresh();
             _displayTimer.Stop(); _autoTimer.Stop();
-            max = double.NaN;
-            bool r = GpuRestart.Restart(out detail);
-            for (int i = 0; r && i < 30; i++)
+            var work = System.Threading.Tasks.Task.Run(() =>
             {
-                System.Threading.Thread.Sleep(1000);
-                PowerProbe.Read(out _, out max, out _, out _);
-                if (!double.IsNaN(max) && max > 0) break;
-            }
+                double m = double.NaN;
+                bool ok = GpuRestart.Restart(out string d);
+                for (int i = 0; ok && i < 30; i++)
+                {
+                    System.Threading.Thread.Sleep(1000);
+                    PowerProbe.Read(out _, out m, out _, out _);
+                    if (!double.IsNaN(m) && m > 0) break;
+                }
+                return (ok, m, d);
+            });
+            // Menu disabled while pumping, so a second Set MAX / Restore can't start a nested restart.
+            var menu = _tray.ContextMenuStrip; if (menu != null) menu.Enabled = false;
+            try { while (!work.IsCompleted) { Application.DoEvents(); System.Threading.Thread.Sleep(50); } }
+            finally { if (menu != null) menu.Enabled = true; }
             _displayTimer.Start(); if (_settings.Auto) _autoTimer.Start();
+            (bool r, double mx, string dt) = work.Result;
+            max = mx; detail = dt;
             return r;
         }
 

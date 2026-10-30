@@ -149,9 +149,16 @@ namespace NvTgpHold
                 { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
                 using (var p = Process.Start(psi))
                 {
-                    string output = p.StandardOutput.ReadToEnd();
-                    if (!p.WaitForExit(60000)) { detail = "pnputil timed out"; return false; }
-                    detail = p.ExitCode == 0 ? "GPU restarted" : "pnputil exit " + p.ExitCode + ": " + output.Trim();
+                    // Read asynchronously so a hung pnputil can't block past the timeout.
+                    var output = p.StandardOutput.ReadToEndAsync();
+                    if (!p.WaitForExit(60000))
+                    {
+                        try { p.Kill(true); } catch { }
+                        detail = "pnputil timed out after 60 s";
+                        return false;
+                    }
+                    string text = output.Wait(2000) ? output.Result : "";
+                    detail = p.ExitCode == 0 ? "GPU restarted" : "pnputil exit " + p.ExitCode + ": " + text.Trim();
                     return p.ExitCode == 0;
                 }
             }

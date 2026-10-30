@@ -30,7 +30,7 @@ Right-click the tray icon for the options below. See the [usage guide](docs/Usag
 | **Sync NVPCF TGP to hold** | On by default. Sets the variable part of the ASUS/NVPCF GPU power (ATK `0x00120098`, G-Helper's GPU power setting) so that fixed base (`0x00120099`) + variable equals the hold target, verifies it by reading it back, and puts it back if something changes it. The previous value is restored on stop, uncheck or exit. |
 | **Keep Dynamic Boost on** | Off by default. Holds with Dynamic Boost left on at 25 W and subtracts it from the NVPCF variable part (150 W = 80 + 45 + 25 boost). |
 | **Auto re-assert in background** | Off by default. Re-sends the GPU hold and the CPU profile every 2 s (configurable, 1 s minimum) even when no drop is seen. Smooths short dips; it does not beat a sustained over-threshold event. |
-| **CPU power (Strix Point)** | Only on AMD Strix Point. 28 / 45 / 65 W profiles (SPL / SPPT / FPPT) through ASUS ATK, plus Windows *Efficient Enabled* boost mode. |
+| **CPU power (Strix Point)** | Only on AMD Strix Point. 28 / 35 / 45 W profiles (SPL / SPPT / FPPT) through ASUS ATK, plus Windows *Efficient Enabled* boost mode. |
 | **Load vBIOS dump...** | Reads a vBIOS dump (for example saved with GPU-Z) and finds the MAX power field. Read-only, needed once. |
 | **Read vBIOS (nvflash)** | Same, but reads the vBIOS directly with `nvflash64.exe` (not included). |
 | **Set MAX ceiling (reboot)** | Writes a persistent ceiling override to the NVIDIA driver registry key at that field. Asks for a vBIOS dump if none is loaded. Takes effect after reboot. |

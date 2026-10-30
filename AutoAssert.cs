@@ -17,12 +17,12 @@ namespace NvTgpHold
 
     internal static class CpuProfiles
     {
-        // SPL = sustained (STAPM), SPPT = slow, FPPT = fast. 65/75/90 is the ASUS Manual-mode default on GA403WW.
+        // SPL = sustained (STAPM), SPPT = slow, FPPT = fast.
         public static readonly CpuProfile[] Presets =
         {
-            new CpuProfile("28 W", 28, 35, 50),
-            new CpuProfile("45 W", 45, 55, 70),
-            new CpuProfile("65 W", 65, 75, 90),
+            new CpuProfile("28 W", 28, 35, 45),
+            new CpuProfile("35 W", 35, 45, 55),
+            new CpuProfile("45 W", 45, 65, 90),
         };
         public const int MinW = 5, MaxW = 90;
 

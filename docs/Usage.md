@@ -160,16 +160,16 @@ gains nothing measurable, because the EC only changes the limit on a step. Below
 calls take a growing share of ACPI time and contend with the EC's SMU mailbox traffic and with
 G-Helper if it runs, so 1 s is the floor.
 
-### CPU power (Strix Point) → Off / 28 W / 45 W / 65 W
+### CPU power (Strix Point) → Off / 28 W / 35 W / 45 W
 Shown only on AMD Strix Point CPUs (family 1Ah, models 0x20–0x2F, e.g. Ryzen AI 9 HX 370). Each
 profile sets the three CPU power limits through the ASUS ATK interface, the same calls G-Helper
 uses, fast first:
 
 | Profile | SPL (sustained, `0x001200A3`) | SPPT (slow, `0x001200A0`) | FPPT (fast, `0x001200C1`) |
 |---|---|---|---|
-| 28 W | 28 | 35 | 50 |
-| 45 W | 45 | 55 | 70 |
-| 65 W | 65 | 75 | 90 (the GA403WW Manual-mode default) |
+| 28 W | 28 | 35 | 45 |
+| 35 W | 35 | 45 | 55 |
+| 45 W | 45 | 65 | 90 |
 
 Picking a profile applies it once, and again after power and resume events. With *Auto re-assert*
 on it is re-applied every period, so the platform defaults can't stick after a throttle event.

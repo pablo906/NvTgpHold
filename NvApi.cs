@@ -140,6 +140,36 @@ namespace NvTgpHold
         private static void Put(byte[] b, int o, uint v) => Buffer.BlockCopy(BitConverter.GetBytes(v), 0, b, o, 4);
     }
 
+    // nvidia-smi with a hard bound: stdout is read asynchronously and the process is killed at the timeout, so a
+    // driver that's restarting or hung can't block the caller (the old ReadToEnd() waited for stdout to close first).
+    internal static class Smi
+    {
+        public static bool Run(string args, int timeoutMs, out string output)
+        {
+            output = "";
+            try
+            {
+                var psi = new ProcessStartInfo("nvidia-smi.exe", args) { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+                using (var p = Process.Start(psi))
+                {
+                    var read = p.StandardOutput.ReadToEndAsync();
+                    if (!p.WaitForExit(timeoutMs)) { try { p.Kill(true); } catch { } return false; }
+                    if (!read.Wait(1000)) return false;
+                    output = read.Result;
+                    return true;
+                }
+            }
+            catch { return false; }
+        }
+    }
+
+    // Set while the NVIDIA device is being restarted. Timer, tray and power-event paths check it and stay off the
+    // driver; the restart's own readback calls PowerProbe directly.
+    internal static class GpuGuard
+    {
+        public static volatile bool Restarting;
+    }
+
     internal static class PowerProbe
     {
         public static bool Read(out double enf, out double max, out double draw, out double util)
@@ -147,11 +177,8 @@ namespace NvTgpHold
             enf = max = draw = util = double.NaN;
             try
             {
-                var psi = new ProcessStartInfo("nvidia-smi.exe", "--query-gpu=enforced.power.limit,power.max_limit,power.draw,utilization.gpu --format=csv,noheader,nounits")
-                { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
-                using (var p = Process.Start(psi))
+                if (!Smi.Run("--query-gpu=enforced.power.limit,power.max_limit,power.draw,utilization.gpu --format=csv,noheader,nounits", 5000, out string o)) return false;
                 {
-                    string o = p.StandardOutput.ReadToEnd(); p.WaitForExit(5000);
                     var parts = o.Split('\n')[0].Split(',');
                     if (parts.Length < 4) return false;
                     if (!double.TryParse(parts[0].Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out enf)) enf = double.NaN;

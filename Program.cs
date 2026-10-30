@@ -126,12 +126,18 @@ namespace NvTgpHold
                 eff.CheckedChanged += (s, e) => { _settings.EfficientBoost = eff.Checked; SettingsStore.Save(_settings); if (!eff.Checked) BoostMode.RestorePrior(); ApplyCpu("boost mode"); Refresh(); };
                 _cpuMenu.DropDownItems.Add(eff);
                 _cpuMenu.DropDownItems.Add(new ToolStripSeparator());
-                var ec = new ToolStripMenuItem("Hold EC CPU ladder at step 0 (GA403WW BIOS 312)")
+                var ec = new ToolStripMenuItem("Hold EC CPU ladder at step 0 (GA403WW BIOS 312, experimental)")
                 {
                     Checked = _settings.EcLadder && EcLadder.Supported, CheckOnClick = true, Enabled = EcLadder.Supported,
                     ToolTipText = EcLadder.Supported ? EcTip : "Unavailable: " + EcLadder.Reason,
                 };
-                ec.CheckedChanged += (s, e) => { _settings.EcLadder = ec.Checked; SettingsStore.Save(_settings); if (ec.Checked) StartEcHold(); else { StopEcHold(); _ecNote = ""; } Refresh(); };
+                ec.CheckedChanged += (s, e) =>
+                {
+                    // Explicit consent on enable: the EC transport can't be made exclusive against ACPI.sys from user mode.
+                    if (ec.Checked && !_settings.EcLadder && MessageBox.Show(EcRisk, "NvTgpHold", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK)
+                    { ec.Checked = false; return; }
+                    _settings.EcLadder = ec.Checked; SettingsStore.Save(_settings); if (ec.Checked) StartEcHold(); else { StopEcHold(); _ecNote = ""; } Refresh();
+                };
                 _cpuMenu.DropDownItems.Add(ec);
                 _ecMenu = ec;
                 if (EcLadder.NeedsPawnIO)
@@ -164,6 +170,7 @@ namespace NvTgpHold
         private static bool ApplyCurrent(int watts, out string detail)
         {
             detail = "";
+            if (GpuGuard.Restarting) { detail = "GPU restarting"; return false; }
             try
             {
                 using (var nv = new NvApiSession())
@@ -188,7 +195,7 @@ namespace NvTgpHold
         // Writes 0x98 so 0x99 + 0x98 equals the hold, then reads it back. Sets _sync; returns true only on a verified match.
         private static bool SyncTgp(string why)
         {
-            if (!_syncTgp || _holdTargetW <= 0) return false;
+            if (!_syncTgp || _holdTargetW <= 0 || GpuGuard.Restarting) return false;
             _lastSync = DateTime.UtcNow;
             // Never write 0x98 before the value to restore is captured; a failed read here waits for the next poll.
             if (_priorPower < 0) _priorPower = AtkAcpi.ReadGpuPower();
@@ -238,7 +245,7 @@ namespace NvTgpHold
 
         private static void Reassert(string why)
         {
-            if (_holdTargetW <= 0) return;
+            if (_holdTargetW <= 0 || GpuGuard.Restarting) return;
             _lastReassert = DateTime.UtcNow;
             AtkAcpi.SetBoost(HoldBoost, out _);
             SyncTgp(why);
@@ -321,12 +328,18 @@ namespace NvTgpHold
         private static bool RestartGpu(out double max, out string detail)
         {
             _last = "restarting GPU..."; Refresh();
-            _displayTimer.Stop(); _autoTimer.Stop();
+            // GpuGuard keeps every other NVIDIA path (hold timer, tray double-click, power/resume events, the 3 s poll)
+            // off the driver while it restarts; the timers are paused as well. The EC hold worker keeps running.
+            bool holdTimerWasOn = _holdTimer.Enabled;
+            _displayTimer.Stop(); _autoTimer.Stop(); _holdTimer.Stop();
+            GpuGuard.Restarting = true;
             var work = System.Threading.Tasks.Task.Run(() =>
             {
                 double m = double.NaN;
                 bool ok = GpuRestart.Restart(out string d);
-                for (int i = 0; ok && i < 30; i++)
+                // Overall 30 s readback deadline; each nvidia-smi query is itself bounded at 5 s (Smi.Run).
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                while (ok && sw.Elapsed.TotalSeconds < 30)
                 {
                     System.Threading.Thread.Sleep(1000);
                     PowerProbe.Read(out _, out m, out _, out _);
@@ -337,8 +350,8 @@ namespace NvTgpHold
             // Menu disabled while pumping, so a second Set MAX / Restore can't start a nested restart.
             var menu = _tray.ContextMenuStrip; if (menu != null) menu.Enabled = false;
             try { while (!work.IsCompleted) { Application.DoEvents(); System.Threading.Thread.Sleep(50); } }
-            finally { if (menu != null) menu.Enabled = true; }
-            _displayTimer.Start(); if (_settings.Auto) _autoTimer.Start();
+            finally { if (menu != null) menu.Enabled = true; GpuGuard.Restarting = false; }
+            _displayTimer.Start(); if (_settings.Auto) _autoTimer.Start(); if (holdTimerWasOn) _holdTimer.Start();
             (bool r, double mx, string dt) = work.Result;
             max = mx; detail = dt;
             return r;
@@ -400,7 +413,7 @@ namespace NvTgpHold
         // already re-syncs NVPCF and does the full re-assert when the enforced limit drops.
         private static void AutoTick()
         {
-            if (!_settings.Auto) return;
+            if (!_settings.Auto || GpuGuard.Restarting) return;
             _autoTicks++;
             string gpu = "";
             if (_holdTargetW > 0)
@@ -462,6 +475,13 @@ namespace NvTgpHold
             if (exiting) { _ecTask?.Wait(2500); EcLadder.Close(); }
         }
 
+        private const string EcRisk =
+            "Experimental. This writes EC RAM every 2 s over the same ports Windows' ACPI driver and the ASUS firmware use.\n\n" +
+            "Windows gives no way to lock those ports from an app, so in rare cases one of our writes can collide with a\n" +
+            "firmware or Windows EC command. Collisions are detected and retried where possible, but a byte that lands at\n" +
+            "the wrong EC address cannot be undone (symptoms seen during testing: a fan mode reset).\n\n" +
+            "Only enable this if you accept that. Details: docs/EC-Ladder.md.";
+
         private const string EcTip =
             "Every 2 s, zeroes the EC's throttle accumulators (the same bytes its own reset routine clears), so the CPU\n" +
             "limit ladder stays at row 0 (80 W) instead of walking down to 26/19 W under GPU load.\n" +
@@ -487,6 +507,8 @@ namespace NvTgpHold
 
         private static void Refresh()
         {
+            // During a GPU restart (tray double-click, power events) only show status; no driver or NVPCF calls.
+            if (GpuGuard.Restarting) { if (_status != null) _status.Text = "GPU restarting...  |  " + _last + (_ecNote.Length > 0 ? "  |  " + _ecNote : ""); return; }
             CheckGHelper();
             PowerProbe.Read(out _enf, out _max, out _draw, out _);
             _gpuBase = AtkAcpi.ReadGpuBase();

@@ -239,9 +239,12 @@ namespace NvTgpHold
             catch (Exception ex) { msg = "registry write failed: " + ex.Message; return false; }
         }
 
-        public static bool RemoveMax(out string msg)
+        public static bool RemoveMax(out string msg) => RemoveMax(out msg, out _);
+
+        // deleted = an override was actually there and removed (only then does a GPU restart change anything).
+        public static bool RemoveMax(out string msg, out bool deleted)
         {
-            msg = "";
+            msg = ""; deleted = false;
             try
             {
                 string foreign = ForeignOwner();
@@ -249,8 +252,10 @@ namespace NvTgpHold
                 using (var k = OpenGpuKey(true, out string err))
                 {
                     if (k == null) { msg = err; return false; }
-                    if (k.GetValue("romOverride00") != null) k.DeleteValue("romOverride00", false);
-                    msg = "MAX override removed. Reboot to restore factory MAX.";
+                    if (k.GetValue("romOverride00") == null) { msg = "no MAX override present"; return true; }
+                    k.DeleteValue("romOverride00", false);
+                    deleted = true;
+                    msg = "MAX override removed. Restart the GPU or reboot to restore factory MAX.";
                     return true;
                 }
             }

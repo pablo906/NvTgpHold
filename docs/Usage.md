@@ -205,6 +205,10 @@ Stops re-applying CURRENT. The current value stays until the driver or platform 
 which usually happens at the next power event. Dynamic Boost stays off.
 
 ### Restore defaults (95 + 25 stock)
+If it removed a MAX override, it first offers to restart the NVIDIA GPU so the stock MAX is back
+without a reboot, then writes the stock values below (a GPU restart resets them, so they go after it).
+It also turns off the EC CPU ladder hold.
+
 Stops the hold, removes the MAX override, sets CURRENT back to 95 W, sets the NVPCF variable GPU power back
 to 0 and turns Dynamic Boost back on (95 + 25 W). It also turns the CPU profile off and restores the
 Windows boost mode. **Reboot** to fully return MAX to the factory value.

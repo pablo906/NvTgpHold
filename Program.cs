@@ -293,25 +293,11 @@ namespace NvTgpHold
             if (!ok) { _last = "MAX failed: " + msg; Balloon(msg); Refresh(); return; }
             _maxTargetW = watts; _last = "MAX " + watts + " W saved - REBOOT";
             // The override is read when the driver shadows the vBIOS, so a GPU device restart applies it without a reboot.
-            if (MessageBox.Show("MAX " + watts + " W saved.\n\nRestart the NVIDIA GPU now to apply it without rebooting?\n" +
-                    "Close games and anything else running on the NVIDIA GPU first; the screen may flicker.",
-                    "NvTgpHold", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            if (AskRestartGpu("MAX " + watts + " W saved.\n\nRestart the NVIDIA GPU now to apply it without rebooting?"))
             {
-                _last = "restarting GPU..."; Refresh();
-                // Same approach as mVolt+: no NVIDIA calls of ours in flight during the restart, then wait for a usable
-                // readback instead of a fixed delay.
-                _displayTimer.Stop(); _autoTimer.Stop();
-                bool r = GpuRestart.Restart(out string rd);
-                double max = double.NaN;
-                for (int i = 0; r && i < 30; i++)
-                {
-                    System.Threading.Thread.Sleep(1000);
-                    PowerProbe.Read(out _, out max, out _, out _);
-                    if (!double.IsNaN(max) && max > 0) break;
-                }
-                _displayTimer.Start(); if (_settings.Auto) _autoTimer.Start();
+                bool r = RestartGpu(out double max, out string rd);
                 bool applied = r && !double.IsNaN(max) && Math.Abs(max - watts) < 1;
-                _last = applied ? "MAX " + watts + " W active (GPU restarted)" : (r ? "GPU restarted, MAX reads " + (double.IsNaN(max) ? "?" : max.ToString("0", CultureInfo.InvariantCulture)) + " W - reboot if it stays" : "GPU restart failed: " + rd + " - REBOOT");
+                _last = applied ? "MAX " + watts + " W active (GPU restarted)" : (r ? "GPU restarted, MAX reads " + Watts(max) + " W - reboot if it stays" : "GPU restart failed: " + rd + " - REBOOT");
                 msg += "\n" + _last;
                 if (applied && _holdTargetW > 0) Reassert("MAX applied");
             }
@@ -319,10 +305,44 @@ namespace NvTgpHold
             Refresh();
         }
 
+        private static string Watts(double w) => double.IsNaN(w) ? "?" : w.ToString("0", CultureInfo.InvariantCulture);
+
+        private static bool AskRestartGpu(string question) =>
+            MessageBox.Show(question + "\nClose games and anything else running on the NVIDIA GPU first; the screen may flicker.",
+                "NvTgpHold", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
+
+        // The driver only reads romOverride00 when it shadows the vBIOS, so restarting the GPU device applies a MAX
+        // change (set or removed) without a reboot. Same approach as mVolt+: none of our NVIDIA calls in flight during
+        // the restart, then wait up to 30 s for a usable readback instead of a fixed delay.
+        private static bool RestartGpu(out double max, out string detail)
+        {
+            _last = "restarting GPU..."; Refresh();
+            _displayTimer.Stop(); _autoTimer.Stop();
+            max = double.NaN;
+            bool r = GpuRestart.Restart(out detail);
+            for (int i = 0; r && i < 30; i++)
+            {
+                System.Threading.Thread.Sleep(1000);
+                PowerProbe.Read(out _, out max, out _, out _);
+                if (!double.IsNaN(max) && max > 0) break;
+            }
+            _displayTimer.Start(); if (_settings.Auto) _autoTimer.Start();
+            return r;
+        }
+
         private static void DoRestore()
         {
             _holdTargetW = 0; _holdTimer.Stop();
-            RegMax.RemoveMax(out string rm);
+            RegMax.RemoveMax(out string rm, out bool removed);
+            // Restart the GPU first so the driver reloads the stock vBIOS MAX; a restart also resets CURRENT and the
+            // NVPCF state, so the stock values below are written after it, not before.
+            string gpu = removed ? "reboot to drop MAX" : "MAX unchanged";
+            if (removed && AskRestartGpu("Override removed.\n\nRestart the NVIDIA GPU now to restore the stock MAX without rebooting?"))
+            {
+                bool r = RestartGpu(out double max, out string rd);
+                gpu = r ? "GPU restarted, MAX " + Watts(max) + " W" : "GPU restart failed: " + rd + " - reboot to drop MAX";
+                rm += "\n" + gpu;
+            }
             ApplyCurrent(StockCurrentW, out string rc);
             AtkAcpi.SetBoost(25, out string rb);   // re-enable Dynamic Boost -> stock 95 + 25
             bool pw = AtkAcpi.SetGpuPower(0, out string rp);   // stock NVPCF map (SPDM) sets the additional part to 0
@@ -334,7 +354,7 @@ namespace NvTgpHold
             if (_ecMenu != null && _ecMenu.Checked) _ecMenu.Checked = false;
             _cpu = null; _settings.CpuProfile = ""; SettingsStore.Save(_settings); BoostMode.RestorePrior(); _cpuNote = "";
             _sync = "";
-            _last = "restored to stock 95+25 (reboot to drop MAX)";
+            _last = "restored to stock 95+25 (" + gpu + ")";
             Balloon("MAX: " + rm + "\nCURRENT->95: " + rc + "\nBoost->25 (on): " + rb + "\nNVPCF additional->0: " + rp);
             Refresh();
         }

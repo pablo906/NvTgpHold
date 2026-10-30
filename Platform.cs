@@ -144,7 +144,8 @@ namespace NvTgpHold
             if (id == null) { detail = "NVIDIA display device not found"; return false; }
             try
             {
-                var psi = new ProcessStartInfo("pnputil.exe", "/restart-device \"" + id + "\"")
+                string pnputil = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "pnputil.exe");
+                var psi = new ProcessStartInfo(pnputil, "/restart-device \"" + id + "\"")
                 { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
                 using (var p = Process.Start(psi))
                 {

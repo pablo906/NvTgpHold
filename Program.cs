@@ -294,9 +294,18 @@ namespace NvTgpHold
                     "NvTgpHold", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
             {
                 _last = "restarting GPU..."; Refresh();
+                // Same approach as mVolt+: no NVIDIA calls of ours in flight during the restart, then wait for a usable
+                // readback instead of a fixed delay.
+                _displayTimer.Stop(); _autoTimer.Stop();
                 bool r = GpuRestart.Restart(out string rd);
-                System.Threading.Thread.Sleep(3000);   // let NVML come back before the poll reads MAX
-                PowerProbe.Read(out _, out double max, out _, out _);
+                double max = double.NaN;
+                for (int i = 0; r && i < 30; i++)
+                {
+                    System.Threading.Thread.Sleep(1000);
+                    PowerProbe.Read(out _, out max, out _, out _);
+                    if (!double.IsNaN(max) && max > 0) break;
+                }
+                _displayTimer.Start(); if (_settings.Auto) _autoTimer.Start();
                 bool applied = r && !double.IsNaN(max) && Math.Abs(max - watts) < 1;
                 _last = applied ? "MAX " + watts + " W active (GPU restarted)" : (r ? "GPU restarted, MAX reads " + (double.IsNaN(max) ? "?" : max.ToString("0", CultureInfo.InvariantCulture)) + " W - reboot if it stays" : "GPU restart failed: " + rd + " - REBOOT");
                 msg += "\n" + _last;

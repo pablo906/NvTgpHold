@@ -128,6 +128,23 @@ namespace NvTgpHold
                 };
                 ec.CheckedChanged += (s, e) => { _settings.EcLadder = ec.Checked; SettingsStore.Save(_settings); if (ec.Checked) { _ecTimer.Start(); EcTick(); } else { _ecTimer.Stop(); _ecNote = ""; } Refresh(); };
                 _cpuMenu.DropDownItems.Add(ec);
+                if (EcLadder.NeedsPawnIO)
+                {
+                    var inst = new ToolStripMenuItem("Install PawnIO (needed for the EC ladder hold)...");
+                    inst.Click += (s, e) =>
+                    {
+                        if (MessageBox.Show("Download and run the official PawnIO installer from github.com/namazso/PawnIO.Setup?\nThe installer's signature is checked (signed by namazso) before it runs.",
+                                "NvTgpHold", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
+                        bool ok = EcLadder.InstallPawnIO(out string d);
+                        ec.Enabled = EcLadder.Supported;
+                        ec.ToolTipText = EcLadder.Supported ? EcTip : "Unavailable: " + EcLadder.Reason;
+                        if (!EcLadder.NeedsPawnIO) inst.Visible = false;
+                        _last = "PawnIO: " + d;
+                        Balloon(_last);
+                        Refresh();
+                    };
+                    _cpuMenu.DropDownItems.Add(inst);
+                }
                 m.Items.Add(_cpuMenu);
             }
             m.Items.Add(new ToolStripMenuItem("Stop holding", null, (s, e) => { _holdTargetW = 0; _holdTimer.Stop(); RestorePrior("hold released"); _last = "hold released"; Refresh(); }));

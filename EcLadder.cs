@@ -32,6 +32,74 @@ namespace NvTgpHold
         public static bool Supported { get; private set; }
         public static string Reason { get; private set; } = "";
         public static string Bios { get; private set; } = "";
+        public static bool NeedsPawnIO { get; private set; }   // supported machine, only the PawnIO driver is missing
+
+        private const string PawnIOSetupUrl = "https://github.com/namazso/PawnIO.Setup/releases/latest/download/PawnIO_setup.exe";
+        private const string PawnIOSigner = "CN=namazso.eu";
+
+        [DllImport("wintrust.dll", CharSet = CharSet.Unicode)]
+        private static extern int WinVerifyTrust(IntPtr hwnd, ref Guid action, ref WinTrustData data);
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct WinTrustFileInfo { public uint cbStruct; public string pcwszFilePath; public IntPtr hFile; public IntPtr pgKnownSubject; }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct WinTrustData
+        {
+            public uint cbStruct; public IntPtr pPolicyCallbackData, pSIPClientData; public uint dwUIChoice, fdwRevocationChecks, dwUnionChoice;
+            public IntPtr pFile; public uint dwStateAction; public IntPtr hWVTStateData, pwszURLReference; public uint dwProvFlags, dwUIContext; public IntPtr pSignatureSettings;
+        }
+
+        // Authenticode chain valid AND signed by namazso (the PawnIO author).
+        private static bool SignedByNamazso(string path, out string detail)
+        {
+            detail = "";
+            var fi = new WinTrustFileInfo { cbStruct = (uint)Marshal.SizeOf<WinTrustFileInfo>(), pcwszFilePath = path };
+            IntPtr pFi = Marshal.AllocHGlobal(Marshal.SizeOf<WinTrustFileInfo>());
+            try
+            {
+                Marshal.StructureToPtr(fi, pFi, false);
+                var wtd = new WinTrustData { cbStruct = (uint)Marshal.SizeOf<WinTrustData>(), dwUIChoice = 2 /* none */, dwUnionChoice = 1 /* file */, pFile = pFi };
+                var action = new Guid("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");   // WINTRUST_ACTION_GENERIC_VERIFY_V2
+                int rc = WinVerifyTrust(IntPtr.Zero, ref action, ref wtd);
+                if (rc != 0) { detail = "signature check failed (0x" + rc.ToString("X8") + ")"; return false; }
+            }
+            finally { Marshal.FreeHGlobal(pFi); }
+            try
+            {
+                using (var cert = System.Security.Cryptography.X509Certificates.X509Certificate.CreateFromSignedFile(path))
+                {
+                    if (cert.Subject.IndexOf(PawnIOSigner, StringComparison.OrdinalIgnoreCase) < 0) { detail = "unexpected signer: " + cert.Subject; return false; }
+                }
+            }
+            catch (Exception ex) { detail = "signer read failed: " + ex.Message; return false; }
+            return true;
+        }
+
+        // Downloads the latest official PawnIO setup, checks its signature, runs it (we're already elevated) and re-detects.
+        public static bool InstallPawnIO(out string detail)
+        {
+            detail = "";
+            string dir = Path.Combine(Path.GetTempPath(), "NvTgpHold"), exe = Path.Combine(dir, "PawnIO_setup.exe");
+            try
+            {
+                Directory.CreateDirectory(dir);
+                using (var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(60) })
+                using (var resp = http.GetAsync(PawnIOSetupUrl).GetAwaiter().GetResult())
+                {
+                    if (!resp.IsSuccessStatusCode) { detail = "download failed: HTTP " + (int)resp.StatusCode; return false; }
+                    File.WriteAllBytes(exe, resp.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult());
+                }
+                if (!SignedByNamazso(exe, out detail)) { try { File.Delete(exe); } catch { } return false; }
+                using (var p = Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true }))
+                    p?.WaitForExit();
+                try { File.Delete(exe); } catch { }
+                Detect();
+                detail = NeedsPawnIO ? "PawnIO setup finished but PawnIOLib.dll is still missing" : (Supported ? "PawnIO installed" : Reason);
+                return !NeedsPawnIO;
+            }
+            catch (Exception ex) { detail = ex.Message; return false; }
+        }
         public static long Retries, Failures;
 
         private sealed class EcTimeout : Exception { public EcTimeout(string m) : base(m) { } }
@@ -50,7 +118,8 @@ namespace NvTgpHold
             catch { }
             Bios = bios.Trim();
             if (!EcLadderTarget.Supported(model, bios)) { Supported = false; Reason = "needs " + EcLadderTarget.Model + " BIOS " + string.Join("/", EcLadderTarget.Bioses) + " (this is " + model + " " + bios + ")"; return; }
-            if (!File.Exists(PawnIODll)) { Supported = false; Reason = "PawnIO not installed"; return; }
+            NeedsPawnIO = !File.Exists(PawnIODll);
+            if (NeedsPawnIO) { Supported = false; Reason = "PawnIO not installed"; return; }
             if (!File.Exists(ModulePath)) { Supported = false; Reason = "LpcACPIEC.bin missing next to NvTgpHold.exe"; return; }
             Supported = true; Reason = "";
         }

@@ -67,7 +67,9 @@ namespace NvTgpHold
             finally { Marshal.FreeHGlobal(pFi); }
             try
             {
+#pragma warning disable SYSLIB0057   // X509CertificateLoader has no Authenticode equivalent; this only reads the signer
                 using (var cert = System.Security.Cryptography.X509Certificates.X509Certificate.CreateFromSignedFile(path))
+#pragma warning restore SYSLIB0057
                 {
                     if (cert.Subject.IndexOf(PawnIOSigner, StringComparison.OrdinalIgnoreCase) < 0) { detail = "unexpected signer: " + cert.Subject; return false; }
                 }

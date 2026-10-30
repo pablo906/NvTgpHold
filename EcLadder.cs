@@ -31,6 +31,7 @@ namespace NvTgpHold
         private static readonly ulong[] _in1 = new ulong[1], _in2 = new ulong[2], _out1 = new ulong[1];
         public static bool Supported { get; private set; }
         public static string Reason { get; private set; } = "";
+        public static string Bios { get; private set; } = "";
         public static long Retries, Failures;
 
         private sealed class EcTimeout : Exception { public EcTimeout(string m) : base(m) { } }
@@ -47,6 +48,7 @@ namespace NvTgpHold
                 }
             }
             catch { }
+            Bios = bios.Trim();
             if (!EcLadderTarget.Supported(model, bios)) { Supported = false; Reason = "needs " + EcLadderTarget.Model + " BIOS " + string.Join("/", EcLadderTarget.Bioses) + " (this is " + model + " " + bios + ")"; return; }
             if (!File.Exists(PawnIODll)) { Supported = false; Reason = "PawnIO not installed"; return; }
             if (!File.Exists(ModulePath)) { Supported = false; Reason = "LpcACPIEC.bin missing next to NvTgpHold.exe"; return; }

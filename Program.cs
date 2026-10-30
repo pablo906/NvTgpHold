@@ -195,7 +195,8 @@ namespace NvTgpHold
             if (noopMw > 0) transportOk = ApplyCurrent((int)Math.Round(enf), out detail); // no-op: re-set current value
             else { using (var nv = new NvApiSession()) { if (!nv.Open(out string e2)) { transportOk = false; detail = e2; } else transportOk = TransportResolver.TryResolve(nv.ImplPath, out _rva, out detail); } }
             bool maxReady = ShadowOffsets.Known(out string vb).HasValue;
-            string verdict = "Driver/transport: " + (transportOk ? "PASS" : "FAIL") + "  |  MAX: " + (maxReady ? "ready (" + vb + ")" : "not ready (load a vBIOS dump)");
+            string verdict = "Driver/transport: " + (transportOk ? "PASS" : "FAIL") + "  |  MAX: " + (maxReady ? "ready (" + vb + ")" : "not ready (load a vBIOS dump)") +
+                "  |  EC ladder: " + (EcLadder.Supported ? "available (" + EcLadder.Bios + ")" : "off (" + EcLadder.Reason + ")");
             _last = verdict;
             Balloon(verdict + "\n" + detail);
             Refresh();

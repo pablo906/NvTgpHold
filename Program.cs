@@ -442,6 +442,10 @@ namespace NvTgpHold
                 for (long slot = 0; !cts.IsCancellationRequested; slot++)
                 {
                     var r = EcLadder.RunSlot(EcSlotBudget, out string d);
+                    // RunSlot doesn't observe cancellation mid-slot, so a slot can finish after StopEcHold cancelled
+                    // this worker. A cancelled generation must not touch shared state or trip the breaker: otherwise a
+                    // quick disable/re-enable lets this worker's stale breaker callback clear a replacement's _ecCts.
+                    if (cts.IsCancellationRequested) break;
                     failedSlots = r == EcLadder.SlotResult.Failed ? failedSlots + 1 : 0;
                     _ecNote = (r == EcLadder.SlotResult.Done ? d : "EC hold: " + d) + (EcLadder.Interleaves > 0 ? ", " + EcLadder.Interleaves + " retries" : "");
                     if (failedSlots >= 2)
@@ -450,6 +454,8 @@ namespace NvTgpHold
                         _ecNote = why;
                         _ui?.Post(_ =>
                         {
+                            if (_ecCts != cts) return;   // a newer generation owns the hold now; leave it alone
+                            cts.Cancel();                // stop this worker before dropping its token
                             _ecCts = null; _settings.EcLadder = false; SettingsStore.Save(_settings);
                             if (_ecMenu != null && _ecMenu.Checked) _ecMenu.Checked = false;
                             _ecNote = why; Balloon(why); Refresh();

@@ -14,6 +14,7 @@ ASUS ROG Zephyrus G14 (GA403WW) above the stock 95 W + 25 W Dynamic Boost cap.
 - [Safety](Safety.md): risks, monitoring, and how to revert
 - [Troubleshooting](Troubleshooting.md): common errors and fixes
 - [Building from Source](Building-from-Source.md)
+- [EC CPU ladder](EC-Ladder.md): developer notes on the GA403WW EC throttle ladder, BIOS 310/312 locations, and what the EC ladder hold writes
 
 ## Tested configuration
 

@@ -9,7 +9,9 @@ namespace NvTgpHold
     // Lean, self-contained tray tool. Features:
     //  - Firmware/driver test: resolve the RM transport RVA + an E633 no-op (PASS/FAIL).
     //  - Load vBIOS dump / Read vBIOS (nvflash): resolve the Board-Power MAX shadow offset from the vBIOS, cache it.
-    //  - Set MAX ceiling: persistent romOverride00 at that offset, reboot to apply (prompts for a vBIOS dump if none is loaded).
+    //  - Set MAX ceiling: persistent romOverride00 at that offset, applied by a GPU device restart or the next reboot
+    //    (prompts for a vBIOS dump if none is loaded; leaves another tool's romOverride00 alone).
+    //  - EC CPU ladder hold (GA403WW BIOS 312 only): resets the EC's throttle accumulators every 2 s. See docs/EC-Ladder.md.
     //  - Set + hold CURRENT: single E633 value, re-asserted as soon as the 3 s status poll sees it dropped,
     //    plus a 5-min safety re-assert and on power/resume transitions.
     //  - Sync NVPCF base (default on): while holding, also set the ASUS/NVPCF base TGP to the hold target and put it
@@ -91,7 +93,7 @@ namespace NvTgpHold
             _holdMenu = new ToolStripMenuItem("Hold CURRENT");
             foreach (int w in Presets) { int ww = w; _holdMenu.DropDownItems.Add(new ToolStripMenuItem(w + " W", null, (s, e) => DoHold(ww))); }
             m.Items.Add(_holdMenu);
-            _maxMenu = new ToolStripMenuItem("Set MAX ceiling (reboot)");
+            _maxMenu = new ToolStripMenuItem("Set MAX ceiling");
             foreach (int w in Presets) { int ww = w; _maxMenu.DropDownItems.Add(new ToolStripMenuItem(w + " W", null, (s, e) => DoSetMax(ww))); }
             m.Items.Add(_maxMenu);
             _syncMenu = new ToolStripMenuItem("Sync NVPCF TGP to hold") { Checked = _syncTgp, CheckOnClick = true };

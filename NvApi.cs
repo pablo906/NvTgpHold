@@ -232,7 +232,7 @@ namespace NvTgpHold
                     byte[] blob = BuildOverride(watts, shadow);
                     k.SetValue("romOverride00", blob, RegistryValueKind.Binary);
                     if (!(k.GetValue("romOverride00") is byte[] rb) || !rb.AsSpan().SequenceEqual(blob)) { msg = "romOverride00 readback mismatch"; return false; }
-                    msg = "MAX " + watts + " W written (offset 0x" + shadow.ToString("X") + "). Reboot to apply.";
+                    msg = "MAX " + watts + " W written (offset 0x" + shadow.ToString("X") + "). Restart the GPU or reboot to apply.";
                     return true;
                 }
             }

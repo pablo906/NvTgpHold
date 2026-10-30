@@ -81,10 +81,17 @@ Does the same as *Load vBIOS dump*, but reads the vBIOS directly with NVIDIA's `
 (read-only `--save`). NvTgpHold does not include nvflash: put `nvflash64.exe` next to
 `NvTgpHold.exe` (or in a `tools` subfolder, `C:\NVFlash`, or on `PATH`).
 
-### Set MAX ceiling (reboot) → 120 ... 250 W
+### Set MAX ceiling → 120 ... 250 W
 Writes a persistent MAX override (`romOverride00`) to the NVIDIA driver's registry key, at the
-MAX field found in your vBIOS. **Nothing changes until you reboot.** After rebooting, the status
-line should show the new `max`.
+MAX field found in your vBIOS. The driver only reads it when it loads the vBIOS, so NvTgpHold then
+offers to **restart the NVIDIA GPU** (`pnputil /restart-device`, the same method mVolt+ uses). Close
+anything running on the GPU first; the screen may flicker. It pauses its NVIDIA polling, waits up to
+30 s for MAX to read back, reports `MAX N W active`, and re-asserts a running hold. Choose *No* and
+it applies on the next reboot instead.
+
+If `romOverride00` was written by another tool (mVolt+'s BIOS override writes the vBIOS version in
+the header, NvTgpHold writes zeros), Set MAX and *Restore defaults* leave it alone and say so.
+Change MAX in that tool, or remove its override first.
 
 If no vBIOS has been loaded yet, this option asks for a vBIOS dump first, then sets MAX.
 
@@ -191,7 +198,7 @@ row 0, then 35/30/26/19 W...) and writes each row to the SMU, independent of the
 It writes only while the EC is in ASUS mode 1 with the OS-present flag set, and never writes that flag.
 The status line shows the step it found each tick (`EC ladder was step N (W)`); step 0 means the hold is
 keeping up. Measured on 2026-10-30: without it the step sat at 2–4 under a 110–150 W GPU load; with it,
-2,400 of 2,400 one-second samples read step 0 with no EC errors.
+2,400 of 2,400 one-second samples read step 0 with no EC errors. Details for developers: [EC CPU ladder](EC-Ladder.md).
 
 ### Stop holding
 Stops re-applying CURRENT. The current value stays until the driver or platform changes it,

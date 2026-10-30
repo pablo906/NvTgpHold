@@ -262,15 +262,29 @@ namespace NvTgpHold
             }
         }
 
-        private const int BackoffTicks = 5;     // after an interleave, stay off the bus for ~10 s
-        private static int _backoff;
-
         // One hold tick. Returns false (and writes nothing) if the EC isn't in the traced state.
+        // On an interleave the tick yields the bus for a short random gap (the other owner's transaction is a few ms)
+        // and retries, up to 3 times. It never skips whole ticks: the ladder climbs a step every ~4-6 s, so a long
+        // back-off would let it escalate. Worst case one 2 s tick is missed and the next one catches it at step <= 1.
         public static bool Reset(out string detail)
         {
             detail = "";
             if (!Supported) { detail = Reason; return false; }
-            if (_backoff > 0) { _backoff--; detail = "backing off after an EC interleave (" + Interleaves + " so far)"; return false; }
+            for (int attempt = 0; ; attempt++)
+            {
+                bool ok = ResetOnce(out detail, out bool interleaved);
+                if (ok || !interleaved) return ok;
+                Interleaves++;
+                if (attempt >= 2) { detail += " (gave up this tick after 3 tries)"; return false; }
+                Thread.Sleep(30 + _rng.Next(70));   // 30-100 ms, jittered so we don't re-collide in lockstep
+            }
+        }
+
+        private static readonly Random _rng = new Random();
+
+        private static bool ResetOnce(out string detail, out bool interleaved)
+        {
+            interleaved = false;
             if (!Open(out detail)) return false;
             bool locked = false;
             try
@@ -290,7 +304,7 @@ namespace NvTgpHold
                 detail = "EC ladder was step " + step + " (" + shadow + " W), " + writes + " writes";
                 return true;
             }
-            catch (EcInterleave ex) { Interleaves++; _backoff = BackoffTicks; detail = "EC interleave (" + ex.Message + "), pausing 10 s"; return false; }
+            catch (EcInterleave ex) { interleaved = true; detail = "EC interleave (" + ex.Message + ")"; return false; }
             catch (EcTimeout ex) { detail = "EC " + ex.Message; return false; }
             catch (Exception ex) { detail = "EC " + ex.Message; return false; }
             finally { if (locked) try { _mutex.ReleaseMutex(); } catch { } }

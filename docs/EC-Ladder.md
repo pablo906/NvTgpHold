@@ -123,8 +123,9 @@ Transport: ASUS vendor commands over the ACPI EC ports, through PawnIO's signed 
   mode a multi-byte 0x92/0x93 transaction can't be made atomic against either of them, so a command from one of them
   can land between our address and value bytes. What the code does about it:
   - waits for an idle EC (IBF/OBF/burst clear, SCI_EVT briefly) and bounds every handshake step (10 ms);
-  - treats OBF or BURST appearing while we're sending command/address bytes as an interleave: it abandons the tick
-    and stays off the bus for 10 s (counted in the status line);
+  - treats OBF or BURST appearing while we're sending command/address bytes as an interleave: it releases the bus
+    for a jittered 30–100 ms and retries the tick, up to 3 times (counted in the status line). It never skips whole
+    ticks, because the ladder climbs a step every ~4–6 s; the worst case is one missed 2 s tick;
   - writes only bytes that aren't already in the reset state, keeping writes to a minimum;
   - never reads an OBF byte it didn't ask for, and retries on timeout.
 

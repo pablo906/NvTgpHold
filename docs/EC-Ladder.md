@@ -136,7 +136,12 @@ Transport: ASUS vendor commands over the ACPI EC ports, through PawnIO's signed 
   - `ECM1(port, cmd, data)` is a generic writer with no mutex, called only from `UPHK` (PEP `_DSM`).
   - WMNB's `RMEM` reads one byte of physical memory, and EC RAM outside the 0x800300 H2RAM page isn't mapped.
 
-  No AML issues 0x92/0x93. Fully coordinated options are a firmware change or a kernel driver.
+  No AML issues 0x92/0x93. Fully coordinated options are a firmware change or a kernel driver. Confirmed with an iasl
+  20260929 disassembly of the BIOS 312 DSDT and all SSDTs:
+  - `ECMD` is only called with 0xAE/0xAD (`DNOT`) and 0x97/0x99 (SSDR PEP `_DSM`).
+  - `ECM1` is on a separate channel, SystemIO `0x68/0x6C`, and only ever sends 0x98/0x86.
+  - The AML's `ECCP`/`ECDP` field is declared `Lock`, so ASUS AML serializes on the ACPI Global Lock. A kernel-side
+    transaction that took the Global Lock would at least be coordinated with the AML users. User mode can't take it.
 
   A tick is about 25 transactions from one process. An earlier test fired 70 back-to-back reads from 70 separate
   process launches, and that coincided with the EC's fan mode resetting, so keep EC access in one process at low

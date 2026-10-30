@@ -17,12 +17,12 @@ namespace NvTgpHold
 
     internal static class CpuProfiles
     {
-        // SPL = sustained (STAPM), SPPT = slow, FPPT = fast. 65/75/90 is the ASUS Manual-mode default on GA403WW.
+        // SPL = sustained (STAPM), SPPT = slow, FPPT = fast.
         public static readonly CpuProfile[] Presets =
         {
-            new CpuProfile("28 W", 28, 35, 50),
-            new CpuProfile("45 W", 45, 55, 70),
-            new CpuProfile("65 W", 65, 75, 90),
+            new CpuProfile("28 W", 28, 35, 45),
+            new CpuProfile("35 W", 35, 50, 65),
+            new CpuProfile("45 W", 45, 65, 90),
         };
         public const int MinW = 5, MaxW = 90;
 
@@ -69,6 +69,7 @@ namespace NvTgpHold
         public int IntervalS = ReassertInterval.DefaultS;
         public string CpuProfile = "";     // "" = off
         public bool EfficientBoost = true;
+        public bool EcLadder;              // hold the EC CPU ladder at step 0 (GA403WW BIOS 312 only)
 
         public static Settings Parse(IEnumerable<string> lines)
         {
@@ -85,6 +86,7 @@ namespace NvTgpHold
                     case "interval": if (int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n)) s.IntervalS = ReassertInterval.Clamp(n); break;
                     case "cpu": s.CpuProfile = CpuProfiles.Find(v)?.Name ?? ""; break;
                     case "effboost": s.EfficientBoost = v != "0"; break;
+                    case "ecladder": s.EcLadder = v == "1"; break;
                 }
             }
             return s;
@@ -96,6 +98,7 @@ namespace NvTgpHold
             "interval=" + IntervalS.ToString(CultureInfo.InvariantCulture),
             "cpu=" + CpuProfile,
             "effboost=" + (EfficientBoost ? "1" : "0"),
+            "ecladder=" + (EcLadder ? "1" : "0"),
         };
     }
 

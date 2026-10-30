@@ -110,6 +110,62 @@ namespace NvTgpHold
         }
     }
 
+    // Restarting the NVIDIA display device makes the driver re-shadow the vBIOS, so a new romOverride00 MAX applies
+    // without a reboot. Anything rendering on the dGPU loses its device.
+    internal static class GpuRestart
+    {
+        private const string DisplayClass = "{4d36e968-e325-11ce-bfc1-08002be10318}";
+
+        public static string NvidiaInstanceId()
+        {
+            try
+            {
+                using (var pci = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Enum\PCI", false))
+                {
+                    if (pci == null) return null;
+                    foreach (string dev in pci.GetSubKeyNames())
+                    {
+                        if (!dev.StartsWith("VEN_10DE&", StringComparison.OrdinalIgnoreCase)) continue;
+                        using (var d = pci.OpenSubKey(dev, false))
+                            foreach (string inst in d.GetSubKeyNames())
+                                using (var i = d.OpenSubKey(inst, false))
+                                    if (string.Equals(Convert.ToString(i?.GetValue("ClassGUID")), DisplayClass, StringComparison.OrdinalIgnoreCase))
+                                        return @"PCI\" + dev + @"\" + inst;
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        public static bool Restart(out string detail)
+        {
+            string id = NvidiaInstanceId();
+            if (id == null) { detail = "NVIDIA display device not found"; return false; }
+            try
+            {
+                string pnputil = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "pnputil.exe");
+                var psi = new ProcessStartInfo(pnputil, "/restart-device \"" + id + "\"")
+                { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
+                using (var p = Process.Start(psi))
+                {
+                    // Read asynchronously so a hung pnputil can't block past the timeout.
+                    var output = p.StandardOutput.ReadToEndAsync();
+                    if (!p.WaitForExit(60000))
+                    {
+                        try { p.Kill(true); } catch { }
+                        detail = "pnputil timed out after 60 s";
+                        return false;
+                    }
+                    string text = output.Wait(2000) ? output.Result : "";
+                    detail = p.ExitCode == 0 ? "GPU restarted" : "pnputil exit " + p.ExitCode + ": " + text.Trim();
+                    return p.ExitCode == 0;
+                }
+            }
+            catch (Exception ex) { detail = ex.Message; return false; }
+        }
+    }
+
     internal static class SettingsStore
     {
         private static readonly string Dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "NvTgpHold");

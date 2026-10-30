@@ -24,7 +24,9 @@ namespace NvTgpHold.Tests
                 Assert.InRange(p.Spl, CpuProfiles.MinW, CpuProfiles.MaxW);
                 Assert.InRange(p.Fppt, CpuProfiles.MinW, CpuProfiles.MaxW);
             }
-            Assert.Equal(new[] { 28, 45, 65 }, System.Array.ConvertAll(CpuProfiles.Presets, p => p.Spl));
+            Assert.Equal(new[] { 28, 35, 45 }, System.Array.ConvertAll(CpuProfiles.Presets, p => p.Spl));
+            Assert.Equal(new[] { 35, 50, 65 }, System.Array.ConvertAll(CpuProfiles.Presets, p => p.Sppt));
+            Assert.Equal(new[] { 45, 65, 90 }, System.Array.ConvertAll(CpuProfiles.Presets, p => p.Fppt));
         }
 
         [Theory]

@@ -21,11 +21,8 @@ namespace NvTgpHold
             id = null; error = "";
             try
             {
-                var psi = new ProcessStartInfo("nvidia-smi.exe", "--query-gpu=vbios_version,pci.device_id,pci.sub_device_id --format=csv,noheader")
-                { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
-                using (var p = Process.Start(psi))
+                if (!Smi.Run("--query-gpu=vbios_version,pci.device_id,pci.sub_device_id --format=csv,noheader", 5000, out string o)) { error = "nvidia-smi did not answer"; return false; }
                 {
-                    string o = p.StandardOutput.ReadToEnd(); p.WaitForExit(5000);
                     var parts = o.Split('\n')[0].Split(',');
                     if (parts.Length < 3) { error = "nvidia-smi returned no GPU identity (dGPU asleep?)"; return false; }
                     uint dev = ParseHex(parts[1]), sub = ParseHex(parts[2]);

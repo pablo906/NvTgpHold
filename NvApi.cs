@@ -140,6 +140,36 @@ namespace NvTgpHold
         private static void Put(byte[] b, int o, uint v) => Buffer.BlockCopy(BitConverter.GetBytes(v), 0, b, o, 4);
     }
 
+    // nvidia-smi with a hard bound: stdout is read asynchronously and the process is killed at the timeout, so a
+    // driver that's restarting or hung can't block the caller (the old ReadToEnd() waited for stdout to close first).
+    internal static class Smi
+    {
+        public static bool Run(string args, int timeoutMs, out string output)
+        {
+            output = "";
+            try
+            {
+                var psi = new ProcessStartInfo("nvidia-smi.exe", args) { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+                using (var p = Process.Start(psi))
+                {
+                    var read = p.StandardOutput.ReadToEndAsync();
+                    if (!p.WaitForExit(timeoutMs)) { try { p.Kill(true); } catch { } return false; }
+                    if (!read.Wait(1000)) return false;
+                    output = read.Result;
+                    return true;
+                }
+            }
+            catch { return false; }
+        }
+    }
+
+    // Set while the NVIDIA device is being restarted. Timer, tray and power-event paths check it and stay off the
+    // driver; the restart's own readback calls PowerProbe directly.
+    internal static class GpuGuard
+    {
+        public static volatile bool Restarting;
+    }
+
     internal static class PowerProbe
     {
         public static bool Read(out double enf, out double max, out double draw, out double util)
@@ -147,11 +177,8 @@ namespace NvTgpHold
             enf = max = draw = util = double.NaN;
             try
             {
-                var psi = new ProcessStartInfo("nvidia-smi.exe", "--query-gpu=enforced.power.limit,power.max_limit,power.draw,utilization.gpu --format=csv,noheader,nounits")
-                { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
-                using (var p = Process.Start(psi))
+                if (!Smi.Run("--query-gpu=enforced.power.limit,power.max_limit,power.draw,utilization.gpu --format=csv,noheader,nounits", 5000, out string o)) return false;
                 {
-                    string o = p.StandardOutput.ReadToEnd(); p.WaitForExit(5000);
                     var parts = o.Split('\n')[0].Split(',');
                     if (parts.Length < 4) return false;
                     if (!double.TryParse(parts[0].Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out enf)) enf = double.NaN;
@@ -205,34 +232,57 @@ namespace NvTgpHold
             return a;
         }
 
+        // NvTgpHold writes a wildcard header (bytes 0-4 = 0). mVolt+'s BIOS override uses the same value name with the
+        // vBIOS version in the header (e.g. 98 03 5C 00 86) and verifies it as its own, so don't overwrite or delete that.
+        public static string ForeignOwner()
+        {
+            try
+            {
+                using (var k = OpenGpuKey(false, out _))
+                    if (k?.GetValue("romOverride00") is byte[] v && v.Length >= 5 && (v[0] | v[1] | v[2] | v[3] | v[4]) != 0)
+                        return "romOverride00 belongs to another tool (likely mVolt+ BIOS override, header " + BitConverter.ToString(v, 0, 5).Replace("-", " ") + ")";
+            }
+            catch { }
+            return null;
+        }
+
         public static bool SetMax(int watts, int shadow, out string msg)
         {
             msg = "";
             try
             {
+                string foreign = ForeignOwner();
+                if (foreign != null) { msg = foreign + ". Change MAX there, or remove its override first."; return false; }
                 using (var k = OpenGpuKey(true, out string err))
                 {
                     if (k == null) { msg = err; return false; }
                     byte[] blob = BuildOverride(watts, shadow);
                     k.SetValue("romOverride00", blob, RegistryValueKind.Binary);
                     if (!(k.GetValue("romOverride00") is byte[] rb) || !rb.AsSpan().SequenceEqual(blob)) { msg = "romOverride00 readback mismatch"; return false; }
-                    msg = "MAX " + watts + " W written (offset 0x" + shadow.ToString("X") + "). Reboot to apply.";
+                    msg = "MAX " + watts + " W written (offset 0x" + shadow.ToString("X") + "). Restart the GPU or reboot to apply.";
                     return true;
                 }
             }
             catch (Exception ex) { msg = "registry write failed: " + ex.Message; return false; }
         }
 
-        public static bool RemoveMax(out string msg)
+        public static bool RemoveMax(out string msg) => RemoveMax(out msg, out _);
+
+        // deleted = an override was actually there and removed (only then does a GPU restart change anything).
+        public static bool RemoveMax(out string msg, out bool deleted)
         {
-            msg = "";
+            msg = ""; deleted = false;
             try
             {
+                string foreign = ForeignOwner();
+                if (foreign != null) { msg = foreign + "; left in place."; return false; }
                 using (var k = OpenGpuKey(true, out string err))
                 {
                     if (k == null) { msg = err; return false; }
-                    if (k.GetValue("romOverride00") != null) k.DeleteValue("romOverride00", false);
-                    msg = "MAX override removed. Reboot to restore factory MAX.";
+                    if (k.GetValue("romOverride00") == null) { msg = "no MAX override present"; return true; }
+                    k.DeleteValue("romOverride00", false);
+                    deleted = true;
+                    msg = "MAX override removed. Restart the GPU or reboot to restore factory MAX.";
                     return true;
                 }
             }

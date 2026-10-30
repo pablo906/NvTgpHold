@@ -1,25 +1,37 @@
-# NvTgpHold Wiki
+# NvTgpHold documentation
 
-NvTgpHold is a Windows tray tool that raises and holds the NVIDIA GPU power limit on the
-ASUS ROG Zephyrus G14 (GA403WW) above the stock 95 W + 25 W Dynamic Boost cap.
+NvTgpHold adjusts and holds GPU power limits on the ASUS ROG Zephyrus G14 GA403WW.
+The utility runs in the Windows system tray with administrator rights.
 
-> **⚠️ Use at your own risk.** This tool pushes the GPU past manufacturer power limits. It can cause
-> higher temperatures, instability, and potentially permanent hardware damage, and may void your
-> warranty. Read [Safety](Safety.md) before using it.
+**Raised limits can cause instability or hardware damage.** Read
+[Safety](Safety.md) before changing settings. Other laptop models have not been
+validated, and the available wattage presets do not establish safe limits.
 
-## Pages
+## Get started
 
-- [Installation](Installation.md): download, requirements, first run
-- [Usage](Usage.md): what each tray menu item does, a recommended workflow, and recommended Windows power settings
-- [Safety](Safety.md): risks, monitoring, and how to revert
-- [Troubleshooting](Troubleshooting.md): common errors and fixes
-- [Building from Source](Building-from-Source.md)
+1. [Install or upgrade](Installation.md).
+2. Follow the [first-run workflow](Usage.md#first-run).
+3. Use [Troubleshooting](Troubleshooting.md) if a test or setting fails.
 
-## Tested configuration
+## Guides and reference
 
-| Item | Value |
+| Page | Contents |
 |---|---|
-| Laptop | ASUS ROG Zephyrus G14 2025, GA403WW (RTX 50-series Laptop GPU) |
-| OS | Windows 11 x64 |
+| [Usage](Usage.md) | GPU limits, CPU profiles, experimental EC hold and persistent settings |
+| [Safety](Safety.md) | Risks, monitoring, reverting and uninstalling |
+| [Building from source](Building-from-Source.md) | Build, tests, packaging and wiki publication |
+| [EC CPU ladder](EC-Ladder.md) | Firmware reference, transport limitations and evidence boundaries |
 
-Other models may not work. Reports from other hardware are welcome as issues.
+## Compatibility and validation
+
+Development hardware: GA403WW with Ryzen AI 9 HX 370, RTX 5080 Laptop GPU and
+Windows 11 x64. The EC feature is restricted to BIOS `GA403WW.312`; BIOS 310
+research does not imply support. NVIDIA driver compatibility is checked at runtime.
+A passing driver test is not a safety test or a guarantee of sustained power.
+
+Earlier hardware measurements informed the EC design. The current retry/breaker
+implementation has only software-level validation, not a new hardware endurance
+test. The EC hold is experimental, off by default, and requires explicit consent.
+
+These pages are maintained in the repository's `docs/` directory and mirrored to
+the [wiki](https://github.com/pablo906/NvTgpHold/wiki) for each release.

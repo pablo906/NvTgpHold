@@ -9,7 +9,9 @@ namespace NvTgpHold
     // Lean, self-contained tray tool. Features:
     //  - Firmware/driver test: resolve the RM transport RVA + an E633 no-op (PASS/FAIL).
     //  - Load vBIOS dump / Read vBIOS (nvflash): resolve the Board-Power MAX shadow offset from the vBIOS, cache it.
-    //  - Set MAX ceiling: persistent romOverride00 at that offset, reboot to apply (prompts for a vBIOS dump if none is loaded).
+    //  - Set MAX ceiling: persistent romOverride00 at that offset, applied by a GPU device restart or the next reboot
+    //    (prompts for a vBIOS dump if none is loaded; leaves another tool's romOverride00 alone).
+    //  - EC CPU ladder hold (GA403WW BIOS 312 only): resets the EC's throttle accumulators every 2 s. See docs/EC-Ladder.md.
     //  - Set + hold CURRENT: single E633 value, re-asserted as soon as the 3 s status poll sees it dropped,
     //    plus a 5-min safety re-assert and on power/resume transitions.
     //  - Sync NVPCF base (default on): while holding, also set the ASUS/NVPCF base TGP to the hold target and put it
@@ -40,6 +42,12 @@ namespace NvTgpHold
         private const int StockCurrentW = 95;
         private static ToolStripMenuItem _status, _holdMenu, _maxMenu, _syncMenu, _autoMenu, _intervalMenu, _cpuMenu;
         private static System.Windows.Forms.Timer _autoTimer;
+        private static readonly TimeSpan EcSlot = TimeSpan.FromSeconds(2);        // the ladder steps every ~4-6 s
+        private static readonly TimeSpan EcSlotBudget = TimeSpan.FromSeconds(1.5); // retry window inside a slot
+        private static volatile string _ecNote = "";
+        private static System.Threading.CancellationTokenSource _ecCts;
+        private static System.Threading.SynchronizationContext _ui;
+        private static ToolStripMenuItem _ecMenu;
         private static Settings _settings = new Settings();
         private static CpuProfile _cpu;                     // active CPU profile, null = not asserting CPU limits
         private static string _cpuNote = "", _autoNote = "", _ghelper = "";
@@ -53,6 +61,7 @@ namespace NvTgpHold
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             CpuInfo.Detect();
+            EcLadder.Detect();
             _settings = SettingsStore.Load();
             _tray = new NotifyIcon { Icon = AppIcon.Load(), Visible = true, Text = "NvTgpHold" };
             _tray.ContextMenuStrip = BuildMenu();
@@ -65,11 +74,13 @@ namespace NvTgpHold
             _autoTimer = new System.Windows.Forms.Timer { Interval = _settings.IntervalS * 1000 };
             _autoTimer.Tick += (s, e) => AutoTick();
             if (_settings.Auto) _autoTimer.Start();
+            _ui = System.Threading.SynchronizationContext.Current;
+            if (_settings.EcLadder && EcLadder.Supported) StartEcHold();
             SystemEvents.PowerModeChanged += (s, e) => { if (_holdTargetW > 0) Reassert("power " + e.Mode); ApplyCpu("power " + e.Mode); };
             SystemEvents.SessionSwitch += (s, e) => { if (e.Reason != SessionSwitchReason.SessionUnlock) return; if (_holdTargetW > 0) Reassert("resume"); ApplyCpu("resume"); };
             if (CpuInfo.StrixPoint && CpuProfiles.Find(_settings.CpuProfile) != null) SetCpuProfile(CpuProfiles.Find(_settings.CpuProfile));
             Refresh();
-            Application.ApplicationExit += (s, e) => { RestorePrior("exit"); BoostMode.RestorePrior(); if (_tray != null) _tray.Visible = false; };
+            Application.ApplicationExit += (s, e) => { RestorePrior("exit"); BoostMode.RestorePrior(); StopEcHold(exiting: true); if (_tray != null) _tray.Visible = false; };
             Application.Run();
         }
 
@@ -85,7 +96,7 @@ namespace NvTgpHold
             _holdMenu = new ToolStripMenuItem("Hold CURRENT");
             foreach (int w in Presets) { int ww = w; _holdMenu.DropDownItems.Add(new ToolStripMenuItem(w + " W", null, (s, e) => DoHold(ww))); }
             m.Items.Add(_holdMenu);
-            _maxMenu = new ToolStripMenuItem("Set MAX ceiling (reboot)");
+            _maxMenu = new ToolStripMenuItem("Set MAX ceiling");
             foreach (int w in Presets) { int ww = w; _maxMenu.DropDownItems.Add(new ToolStripMenuItem(w + " W", null, (s, e) => DoSetMax(ww))); }
             m.Items.Add(_maxMenu);
             _syncMenu = new ToolStripMenuItem("Sync NVPCF TGP to hold") { Checked = _syncTgp, CheckOnClick = true };
@@ -114,6 +125,38 @@ namespace NvTgpHold
                 var eff = new ToolStripMenuItem("Efficient Enabled boost mode") { Checked = _settings.EfficientBoost, CheckOnClick = true };
                 eff.CheckedChanged += (s, e) => { _settings.EfficientBoost = eff.Checked; SettingsStore.Save(_settings); if (!eff.Checked) BoostMode.RestorePrior(); ApplyCpu("boost mode"); Refresh(); };
                 _cpuMenu.DropDownItems.Add(eff);
+                _cpuMenu.DropDownItems.Add(new ToolStripSeparator());
+                var ec = new ToolStripMenuItem("Hold EC CPU ladder at step 0 (GA403WW BIOS 312, experimental)")
+                {
+                    Checked = _settings.EcLadder && EcLadder.Supported, CheckOnClick = true, Enabled = EcLadder.Supported,
+                    ToolTipText = EcLadder.Supported ? EcTip : "Unavailable: " + EcLadder.Reason,
+                };
+                ec.CheckedChanged += (s, e) =>
+                {
+                    // Explicit consent on enable: the EC transport can't be made exclusive against ACPI.sys from user mode.
+                    if (ec.Checked && !_settings.EcLadder && MessageBox.Show(EcRisk, "NvTgpHold", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK)
+                    { ec.Checked = false; return; }
+                    _settings.EcLadder = ec.Checked; SettingsStore.Save(_settings); if (ec.Checked) StartEcHold(); else { StopEcHold(); _ecNote = ""; } Refresh();
+                };
+                _cpuMenu.DropDownItems.Add(ec);
+                _ecMenu = ec;
+                if (EcLadder.NeedsPawnIO)
+                {
+                    var inst = new ToolStripMenuItem("Install PawnIO (needed for the EC ladder hold)...");
+                    inst.Click += (s, e) =>
+                    {
+                        if (MessageBox.Show("Download and run the official PawnIO installer from github.com/namazso/PawnIO.Setup?\nThe installer's signature is checked (signed by namazso) before it runs.",
+                                "NvTgpHold", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
+                        bool ok = EcLadder.InstallPawnIO(out string d);
+                        ec.Enabled = EcLadder.Supported;
+                        ec.ToolTipText = EcLadder.Supported ? EcTip : "Unavailable: " + EcLadder.Reason;
+                        if (!EcLadder.NeedsPawnIO) inst.Visible = false;
+                        _last = "PawnIO: " + d;
+                        Balloon(_last);
+                        Refresh();
+                    };
+                    _cpuMenu.DropDownItems.Add(inst);
+                }
                 m.Items.Add(_cpuMenu);
             }
             m.Items.Add(new ToolStripMenuItem("Stop holding", null, (s, e) => { _holdTargetW = 0; _holdTimer.Stop(); RestorePrior("hold released"); _last = "hold released"; Refresh(); }));
@@ -127,6 +170,7 @@ namespace NvTgpHold
         private static bool ApplyCurrent(int watts, out string detail)
         {
             detail = "";
+            if (GpuGuard.Restarting) { detail = "GPU restarting"; return false; }
             try
             {
                 using (var nv = new NvApiSession())
@@ -151,7 +195,7 @@ namespace NvTgpHold
         // Writes 0x98 so 0x99 + 0x98 equals the hold, then reads it back. Sets _sync; returns true only on a verified match.
         private static bool SyncTgp(string why)
         {
-            if (!_syncTgp || _holdTargetW <= 0) return false;
+            if (!_syncTgp || _holdTargetW <= 0 || GpuGuard.Restarting) return false;
             _lastSync = DateTime.UtcNow;
             // Never write 0x98 before the value to restore is captured; a failed read here waits for the next poll.
             if (_priorPower < 0) _priorPower = AtkAcpi.ReadGpuPower();
@@ -181,7 +225,8 @@ namespace NvTgpHold
             if (noopMw > 0) transportOk = ApplyCurrent((int)Math.Round(enf), out detail); // no-op: re-set current value
             else { using (var nv = new NvApiSession()) { if (!nv.Open(out string e2)) { transportOk = false; detail = e2; } else transportOk = TransportResolver.TryResolve(nv.ImplPath, out _rva, out detail); } }
             bool maxReady = ShadowOffsets.Known(out string vb).HasValue;
-            string verdict = "Driver/transport: " + (transportOk ? "PASS" : "FAIL") + "  |  MAX: " + (maxReady ? "ready (" + vb + ")" : "not ready (load a vBIOS dump)");
+            string verdict = "Driver/transport: " + (transportOk ? "PASS" : "FAIL") + "  |  MAX: " + (maxReady ? "ready (" + vb + ")" : "not ready (load a vBIOS dump)") +
+                "  |  EC ladder: " + (EcLadder.Supported ? "available (" + EcLadder.Bios + ")" : "off (" + EcLadder.Reason + ")");
             _last = verdict;
             Balloon(verdict + "\n" + detail);
             Refresh();
@@ -200,7 +245,7 @@ namespace NvTgpHold
 
         private static void Reassert(string why)
         {
-            if (_holdTargetW <= 0) return;
+            if (_holdTargetW <= 0 || GpuGuard.Restarting) return;
             _lastReassert = DateTime.UtcNow;
             AtkAcpi.SetBoost(HoldBoost, out _);
             SyncTgp(why);
@@ -254,25 +299,89 @@ namespace NvTgpHold
                 if (!shadow.HasValue) return;
             }
             bool ok = RegMax.SetMax(watts, shadow.Value, out string msg);
-            if (ok) { _maxTargetW = watts; _last = "MAX " + watts + " W saved - REBOOT"; }
-            else _last = "MAX failed: " + msg;
+            if (!ok) { _last = "MAX failed: " + msg; Balloon(msg); Refresh(); return; }
+            _maxTargetW = watts; _last = "MAX " + watts + " W saved - REBOOT";
+            // The override is read when the driver shadows the vBIOS, so a GPU device restart applies it without a reboot.
+            if (AskRestartGpu("MAX " + watts + " W saved.\n\nRestart the NVIDIA GPU now to apply it without rebooting?"))
+            {
+                bool r = RestartGpu(out double max, out string rd);
+                bool applied = r && !double.IsNaN(max) && Math.Abs(max - watts) < 1;
+                _last = applied ? "MAX " + watts + " W active (GPU restarted)" : (r ? "GPU restarted, MAX reads " + Watts(max) + " W - reboot if it stays" : "GPU restart failed: " + rd + " - REBOOT");
+                msg += "\n" + _last;
+                if (applied && _holdTargetW > 0) Reassert("MAX applied");
+            }
             Balloon(msg);
             Refresh();
+        }
+
+        private static string Watts(double w) => double.IsNaN(w) ? "?" : w.ToString("0", CultureInfo.InvariantCulture);
+
+        private static bool AskRestartGpu(string question) =>
+            MessageBox.Show(question + "\nClose games and anything else running on the NVIDIA GPU first; the screen may flicker.",
+                "NvTgpHold", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
+
+        // The driver only reads romOverride00 when it shadows the vBIOS, so restarting the GPU device applies a MAX
+        // change (set or removed) without a reboot. Same approach as mVolt+: none of our NVIDIA calls in flight during
+        // the restart, then wait up to 30 s for a usable readback instead of a fixed delay.
+        // Runs the restart and the readback wait off the UI thread with a message pump, so the tray and the EC hold
+        // timer keep running while the device restarts (pnputil itself is bounded at 60 s, the readback at 30 s).
+        private static bool RestartGpu(out double max, out string detail)
+        {
+            _last = "restarting GPU..."; Refresh();
+            // GpuGuard keeps every other NVIDIA path (hold timer, tray double-click, power/resume events, the 3 s poll)
+            // off the driver while it restarts; the timers are paused as well. The EC hold worker keeps running.
+            bool holdTimerWasOn = _holdTimer.Enabled;
+            _displayTimer.Stop(); _autoTimer.Stop(); _holdTimer.Stop();
+            GpuGuard.Restarting = true;
+            var work = System.Threading.Tasks.Task.Run(() =>
+            {
+                double m = double.NaN;
+                bool ok = GpuRestart.Restart(out string d);
+                // Overall 30 s readback deadline; each nvidia-smi query is itself bounded at 5 s (Smi.Run).
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                while (ok && sw.Elapsed.TotalSeconds < 30)
+                {
+                    System.Threading.Thread.Sleep(1000);
+                    PowerProbe.Read(out _, out m, out _, out _);
+                    if (!double.IsNaN(m) && m > 0) break;
+                }
+                return (ok, m, d);
+            });
+            // Menu disabled while pumping, so a second Set MAX / Restore can't start a nested restart.
+            var menu = _tray.ContextMenuStrip; if (menu != null) menu.Enabled = false;
+            try { while (!work.IsCompleted) { Application.DoEvents(); System.Threading.Thread.Sleep(50); } }
+            finally { if (menu != null) menu.Enabled = true; GpuGuard.Restarting = false; }
+            _displayTimer.Start(); if (_settings.Auto) _autoTimer.Start(); if (holdTimerWasOn) _holdTimer.Start();
+            (bool r, double mx, string dt) = work.Result;
+            max = mx; detail = dt;
+            return r;
         }
 
         private static void DoRestore()
         {
             _holdTargetW = 0; _holdTimer.Stop();
-            RegMax.RemoveMax(out string rm);
+            RegMax.RemoveMax(out string rm, out bool removed);
+            // Restart the GPU first so the driver reloads the stock vBIOS MAX; a restart also resets CURRENT and the
+            // NVPCF state, so the stock values below are written after it, not before.
+            string gpu = removed ? "reboot to drop MAX" : "MAX unchanged";
+            if (removed && AskRestartGpu("Override removed.\n\nRestart the NVIDIA GPU now to restore the stock MAX without rebooting?"))
+            {
+                bool r = RestartGpu(out double max, out string rd);
+                gpu = r ? "GPU restarted, MAX " + Watts(max) + " W" : "GPU restart failed: " + rd + " - reboot to drop MAX";
+                rm += "\n" + gpu;
+            }
             ApplyCurrent(StockCurrentW, out string rc);
             AtkAcpi.SetBoost(25, out string rb);   // re-enable Dynamic Boost -> stock 95 + 25
             bool pw = AtkAcpi.SetGpuPower(0, out string rp);   // stock NVPCF map (SPDM) sets the additional part to 0
             _gpuPower = AtkAcpi.ReadGpuPower();
             if (pw && _gpuPower != 0) rp = "wrote 0 W, reads " + (_gpuPower < 0 ? "?" : _gpuPower + " W");
             _priorPower = -1;   // Restore defaults means stock, not the pre-hold value
+            // Stock means the EC's own ladder too: stop the hold and don't resume it on next launch.
+            StopEcHold(); _ecNote = ""; _settings.EcLadder = false;
+            if (_ecMenu != null && _ecMenu.Checked) _ecMenu.Checked = false;
             _cpu = null; _settings.CpuProfile = ""; SettingsStore.Save(_settings); BoostMode.RestorePrior(); _cpuNote = "";
             _sync = "";
-            _last = "restored to stock 95+25 (reboot to drop MAX)";
+            _last = "restored to stock 95+25 (" + gpu + ")";
             Balloon("MAX: " + rm + "\nCURRENT->95: " + rc + "\nBoost->25 (on): " + rb + "\nNVPCF additional->0: " + rp);
             Refresh();
         }
@@ -304,7 +413,7 @@ namespace NvTgpHold
         // already re-syncs NVPCF and does the full re-assert when the enforced limit drops.
         private static void AutoTick()
         {
-            if (!_settings.Auto) return;
+            if (!_settings.Auto || GpuGuard.Restarting) return;
             _autoTicks++;
             string gpu = "";
             if (_holdTargetW > 0)
@@ -316,6 +425,74 @@ namespace NvTgpHold
             if (gpu.Length == 0 && _cpu == null) { _autoNote = "auto: nothing to hold"; return; }
             _autoNote = "auto #" + _autoTicks + " " + DateTime.Now.ToString("HH:mm:ss") + (gpu.Length > 0 ? " " + gpu : "") + (_cpu != null ? (cpu ? " CPU ok" : " CPU failed") : "");
         }
+
+        // Own worker on a fixed 2 s slot, independent of Auto re-assert and off the UI thread (a slot may spend up to
+        // 1.5 s retrying). Breaker: two slots in a row with no clean, confirmed attempt is a fault, not contention, so the
+        // hold switches itself off and says so. Skipped slots (EC not in mode 1 / OS-present) don't count.
+        private static void StartEcHold()
+        {
+            if (_ecCts != null) return;
+            _ecTask?.Wait(2500);   // previous worker finishing its slot
+            var cts = new System.Threading.CancellationTokenSource();
+            _ecCts = cts;
+            var task = System.Threading.Tasks.Task.Run(() =>
+            {
+                int failedSlots = 0;
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                for (long slot = 0; !cts.IsCancellationRequested; slot++)
+                {
+                    var r = EcLadder.RunSlot(EcSlotBudget, out string d);
+                    // RunSlot doesn't observe cancellation mid-slot, so a slot can finish after StopEcHold cancelled
+                    // this worker. A cancelled generation must not touch shared state or trip the breaker: otherwise a
+                    // quick disable/re-enable lets this worker's stale breaker callback clear a replacement's _ecCts.
+                    if (cts.IsCancellationRequested) break;
+                    failedSlots = r == EcLadder.SlotResult.Failed ? failedSlots + 1 : 0;
+                    _ecNote = (r == EcLadder.SlotResult.Done ? d : "EC hold: " + d) + (EcLadder.Interleaves > 0 ? ", " + EcLadder.Interleaves + " retries" : "");
+                    if (failedSlots >= 2)
+                    {
+                        string why = "EC hold stopped: no confirmed reset in 2 slots (" + d + ")";
+                        _ecNote = why;
+                        _ui?.Post(_ =>
+                        {
+                            if (_ecCts != cts) return;   // a newer generation owns the hold now; leave it alone
+                            cts.Cancel();                // stop this worker before dropping its token
+                            _ecCts = null; _settings.EcLadder = false; SettingsStore.Save(_settings);
+                            if (_ecMenu != null && _ecMenu.Checked) _ecMenu.Checked = false;
+                            _ecNote = why; Balloon(why); Refresh();
+                        }, null);
+                        break;
+                    }
+                    var wait = TimeSpan.FromTicks(EcSlot.Ticks * (slot + 1)) - clock.Elapsed;   // next slot on schedule
+                    if (wait > TimeSpan.Zero) cts.Token.WaitHandle.WaitOne(wait);
+                }
+            });
+            _ecTask = task;
+        }
+
+        private static System.Threading.Tasks.Task _ecTask;
+
+        // The PawnIO handle stays open while the app runs (it's only closed on exit), so a stop followed by a quick
+        // re-enable can't close a handle the new worker is using. A restart waits for the old worker's slot to end.
+        private static void StopEcHold(bool exiting = false)
+        {
+            var cts = _ecCts;
+            _ecCts = null;
+            cts?.Cancel();
+            if (exiting) { _ecTask?.Wait(2500); EcLadder.Close(); }
+        }
+
+        private const string EcRisk =
+            "Experimental. This writes EC RAM every 2 s over the same ports Windows' ACPI driver and the ASUS firmware use.\n\n" +
+            "Windows gives no way to lock those ports from an app, so in rare cases one of our writes can collide with a\n" +
+            "firmware or Windows EC command. Collisions are detected and retried where possible, but a byte that lands at\n" +
+            "the wrong EC address cannot be undone (symptoms seen during testing: a fan mode reset).\n\n" +
+            "Only enable this if you accept that. Details: docs/EC-Ladder.md.";
+
+        private const string EcTip =
+            "Every 2 s, zeroes the EC's throttle accumulators (the same bytes its own reset routine clears), so the CPU\n" +
+            "limit ladder stays at row 0 (80 W) instead of walking down to 26/19 W under GPU load.\n" +
+            "Uses PawnIO + LpcACPIEC (ports 0x62/0x66). Skips the write unless the EC is in ASUS mode 1 with the OS-present\n" +
+            "flag set. The CPU limit you get is still whatever the CPU profile / G-Helper sets below 80 W.";
 
         private static void CheckGHelper()
         {
@@ -336,6 +513,8 @@ namespace NvTgpHold
 
         private static void Refresh()
         {
+            // During a GPU restart (tray double-click, power events) only show status; no driver or NVPCF calls.
+            if (GpuGuard.Restarting) { if (_status != null) _status.Text = "GPU restarting...  |  " + _last + (_ecNote.Length > 0 ? "  |  " + _ecNote : ""); return; }
             CheckGHelper();
             PowerProbe.Read(out _enf, out _max, out _draw, out _);
             _gpuBase = AtkAcpi.ReadGpuBase();
@@ -368,7 +547,7 @@ namespace NvTgpHold
             string mx = double.IsNaN(_max) ? "?" : _max.ToString("0", CultureInfo.InvariantCulture);
             string hold = _holdTargetW > 0 ? ("HOLD " + _holdTargetW + " W") : "hold off";
             string nv = (_gpuBase >= 0 ? _gpuBase.ToString(CultureInfo.InvariantCulture) : "?") + "+" + (_gpuPower >= 0 ? _gpuPower.ToString(CultureInfo.InvariantCulture) : "?");
-            string extra = (_cpuNote.Length > 0 ? "  |  " + _cpuNote : "") + (_settings.Auto ? "  |  every " + _settings.IntervalS + " s" + (_autoNote.Length > 0 ? ", " + _autoNote : "") : "") + (_ghelper.Length > 0 ? "  |  " + _ghelper : "");
+            string extra = (_cpuNote.Length > 0 ? "  |  " + _cpuNote : "") + (_ecNote.Length > 0 ? "  |  " + _ecNote : "") + (_settings.Auto ? "  |  every " + _settings.IntervalS + " s" + (_autoNote.Length > 0 ? ", " + _autoNote : "") : "") + (_ghelper.Length > 0 ? "  |  " + _ghelper : "");
             if (_status != null) _status.Text = hold + "  |  enf " + enf + " / max " + mx + " W  |  NVPCF " + nv + " W" + (_sync.Length > 0 ? " (" + _sync + ")" : "") + "  |  " + _last + extra;
             if (_intervalMenu != null) foreach (ToolStripMenuItem it in _intervalMenu.DropDownItems) it.Checked = (int)it.Tag == _settings.IntervalS;
             if (_cpuMenu != null) foreach (ToolStripItem it in _cpuMenu.DropDownItems) if (it is ToolStripMenuItem mi && !mi.CheckOnClick) mi.Checked = (mi.Tag as string) == (_cpu?.Name) || (mi.Tag == null && _cpu == null);

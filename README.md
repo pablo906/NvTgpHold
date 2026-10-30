@@ -1,79 +1,84 @@
 # NvTgpHold
 
-A small Windows tray tool for the ASUS ROG Zephyrus G14 (GA403WW, RTX 50-series laptop GPU)
-that raises and holds the NVIDIA GPU's power limit above the stock platform cap.
+A Windows tray utility for adjusting and holding NVIDIA GPU power limits on the
+ASUS ROG Zephyrus G14 GA403WW. It can also apply AMD Strix Point CPU power profiles.
 
-> ## ⚠️ SAFETY DISCLAIMER — READ BEFORE USE
->
-> **This tool changes GPU power and boost limits beyond the manufacturer's defaults.**
-> Running hardware outside its stock power envelope can cause higher temperatures,
-> instability, crashes, accelerated wear, battery/charger stress, or **permanent hardware damage**.
-> It writes to the NVIDIA driver registry key and sends undocumented NvAPI / ASUS ATK ACPI calls.
->
-> - It is **unofficial** and not affiliated with or endorsed by NVIDIA or ASUS.
-> - It may **void your warranty**.
-> - It was developed and tested on **one machine** (GA403WW). Other models, BIOS versions or
->   driver versions may behave differently or not at all.
-> - Monitor temperatures and power draw while using it.
->
-> **You use this software entirely at your own risk.** The authors accept no liability for any
-> damage, data loss or other consequences (see [LICENSE](LICENSE)).
+**Use at your own risk.** Raising power limits can cause overheating, instability,
+charger or battery stress, and permanent hardware damage. This is an unofficial
+tool, tested on one laptop model; compatibility and safe power levels are not
+guaranteed. Read [Safety](docs/Safety.md) before using it.
 
-## What it does
+## Download and start
 
-Right-click the tray icon for the options below. See the [usage guide](docs/Usage.md) for details.
+1. Download the Windows x64 ZIP from [Releases](https://github.com/pablo906/NvTgpHold/releases/latest).
+2. Compare its SHA-256 with the checksum in that release, then extract the entire ZIP.
+3. Install the [.NET 9 Desktop Runtime (x64)](https://dotnet.microsoft.com/download/dotnet/9.0)
+   if needed, and run `NvTgpHold.exe`. Accept the administrator prompt.
+4. Right-click the tray icon and choose **Run firmware / driver test**.
 
-| Menu item | Effect |
+Requires Windows 11 x64, an active NVIDIA GPU with its driver, and the ASUS System
+Control Interface / ATK ACPI driver. Release ZIPs require the .NET runtime above.
+See [Installation](docs/Installation.md) for upgrading and optional startup tasks.
+
+## Features
+
+| Feature | Purpose |
 |---|---|
-| **Run firmware / driver test** | Resolves the driver transport and performs a no-op set; reports PASS/FAIL. |
-| **Hold CURRENT** (120–250 W) | Turns ASUS Dynamic Boost off, sets the enforced GPU power limit, and re-applies it within about 3 seconds whenever something pulls it down (plus every 5 minutes and on power/resume events). |
-| **Sync NVPCF TGP to hold** | On by default. Sets the variable part of the ASUS/NVPCF GPU power (ATK `0x00120098`, G-Helper's GPU power setting) so that fixed base (`0x00120099`) + variable equals the hold target, verifies it by reading it back, and puts it back if something changes it. The previous value is restored on stop, uncheck or exit. |
-| **Keep Dynamic Boost on** | Off by default. Holds with Dynamic Boost left on at 25 W and subtracts it from the NVPCF variable part (150 W = 80 + 45 + 25 boost). |
-| **Auto re-assert in background** | Off by default. Re-sends the GPU hold and the CPU profile every 2 s (configurable, 1 s minimum) even when no drop is seen. Smooths short dips; it does not beat a sustained over-threshold event. |
-| **CPU power (Strix Point)** | Only on AMD Strix Point. 28 / 45 / 65 W profiles (SPL / SPPT / FPPT) through ASUS ATK, plus Windows *Efficient Enabled* boost mode. |
-| **Load vBIOS dump...** | Reads a vBIOS dump (for example saved with GPU-Z) and finds the MAX power field. Read-only, needed once. |
-| **Read vBIOS (nvflash)** | Same, but reads the vBIOS directly with `nvflash64.exe` (not included). |
-| **Set MAX ceiling (reboot)** | Writes a persistent ceiling override to the NVIDIA driver registry key at that field. Asks for a vBIOS dump if none is loaded. Takes effect after reboot. |
-| **Stop holding** | Stops re-asserting the CURRENT value. |
-| **Restore defaults** | Removes the MAX override, sets CURRENT back to stock 95 W, sets the NVPCF variable GPU power back to 0 and re-enables Dynamic Boost (95 + 25 W). |
+| Hold CURRENT | Set the enforced GPU power limit and re-apply it after detected drops and power events. |
+| Set MAX ceiling | Save a persistent ceiling override; apply it with an offered GPU restart or a reboot. A vBIOS dump is read once to locate the field; nothing is flashed. |
+| NVPCF sync | Match the ASUS platform power setting to the hold target, with readback and prior-value restoration. |
+| Auto re-assert | Optionally resend the GPU hold and CPU profile every 1–30 seconds; default interval is 2 seconds. |
+| CPU power profiles | Apply 28 / 35 / 45 W sustained CPU profiles on AMD Strix Point, with optional Windows Efficient Enabled boost mode. |
+| Experimental EC CPU ladder hold | On GA403WW BIOS 312 only, periodically reset EC throttle accumulators. Requires PawnIO and explicit opt-in. |
 
-Dynamic Boost must stay **off** for a raised CURRENT limit to hold; the tool handles this for you.
-It warns when G-Helper runs with *Auto apply* power limits on, since that fights the hold.
+Menu presets are available targets, **not validated safe power ratings** for your
+laptop. Re-applying limits cannot guarantee that firmware will sustain them.
+Dynamic Boost is turned off during a GPU hold by default; an optional mode keeps
+it on. G-Helper's automatic power-limit application can conflict with the hold.
 
-## Download
+### Experimental EC feature
 
-Get the latest `NvTgpHold-vX.Y.Z-win-x64.zip` from the [Releases](../../releases) page, check its
-SHA-256 against the release notes, extract it and run `NvTgpHold.exe`. Full guide in the
-[docs](docs/README.md) (also mirrored to the [wiki](../../wiki)).
+The EC hold shares hardware ports with Windows and ASUS firmware. Its mutex,
+readback, retries and automatic stop on repeated failures **cannot prevent every
+collision or undo a misplaced write**. Fan-mode anomalies were observed during
+development; their cause has not been established. The final retry/breaker path
+has not been validated on hardware. The feature is off by default and separate
+from ordinary CPU profiles. See [Usage](docs/Usage.md#experimental-ec-cpu-ladder-hold)
+and the [technical reference](docs/EC-Ladder.md) before enabling it.
 
-## Requirements
+## Documentation
 
-- Windows 11 x64, administrator rights (the manifest requests elevation)
-- [.NET 9 Desktop Runtime (x64)](https://dotnet.microsoft.com/download/dotnet/9.0)
-- NVIDIA driver with `nvapi64.dll`
-- ASUS ATK ACPI driver (installed with Armoury Crate / ASUS System Control Interface)
-- .NET 9 SDK to build
+- [Installation](docs/Installation.md): requirements, download, upgrade and startup
+- [Usage](docs/Usage.md): first run, menu options and settings persistence
+- [Safety and reverting changes](docs/Safety.md)
+- [Troubleshooting](docs/Troubleshooting.md)
+- [Building and release checks](docs/Building-from-Source.md)
+- [GitHub wiki](https://github.com/pablo906/NvTgpHold/wiki): published copy of these guides
 
-## Build
+The Markdown files in `docs/` are the documentation source. Firmware addresses
+and research notes belong in the technical reference, rather than the setup guide.
 
-```
+## Revert or uninstall
+
+Choose **Restore defaults**. If a MAX override is removed, accept the GPU restart
+after closing GPU applications, or reboot. Exit the utility and remove any startup
+task before deleting its folder. Another tool's recognized MAX override is left
+untouched. CPU PPT values cannot be read back or restored to their prior values;
+use an ASUS/G-Helper profile change or reboot to restore platform CPU limits.
+
+## Build and contribute
+
+```powershell
 dotnet build -c Release
+dotnet test tests/NvTgpHold.Tests -c Release
 ```
 
-The executable is written to `bin/Release/NvTgpHold.exe`.
-
-Hardware-free tests for the NVPCF TGP arithmetic and the auto re-assert logic: `dotnet test tests/NvTgpHold.Tests`.
-
-## Uninstall / revert
-
-Use **Restore defaults**, then reboot. Closing the tool stops the hold; the MAX override persists in
-the registry until removed by **Restore defaults**.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md). All changes go through pull requests and require the
-maintainer's approval before merging.
+See [Building from source](docs/Building-from-Source.md) and
+[CONTRIBUTING.md](CONTRIBUTING.md). Report reproducible bugs through
+[GitHub issues](https://github.com/pablo906/NvTgpHold/issues); report security
+issues using the process in [SECURITY.md](SECURITY.md).
 
 ## License
 
-[MIT](LICENSE)
+NvTgpHold is [MIT licensed](LICENSE). The bundled PawnIO `LpcACPIEC.bin` module is
+LGPL-2.1-or-later; see [third-party notices](third_party/PawnIO.Modules.md).

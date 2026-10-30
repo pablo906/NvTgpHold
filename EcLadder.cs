@@ -78,29 +78,55 @@ namespace NvTgpHold
             return true;
         }
 
-        // Downloads the latest official PawnIO setup, checks its signature, runs it (we're already elevated) and re-detects.
+        // A fresh, randomly named folder under ProgramData that only Administrators and SYSTEM can write, created with
+        // that ACL (no window where it inherits ProgramData's user-create rights).
+        private static string CreateAdminOnlyDir()
+        {
+            var sec = new System.Security.AccessControl.DirectorySecurity();
+            sec.SetAccessRuleProtection(true, false);
+            var full = System.Security.AccessControl.FileSystemRights.FullControl;
+            var inherit = System.Security.AccessControl.InheritanceFlags.ContainerInherit | System.Security.AccessControl.InheritanceFlags.ObjectInherit;
+            foreach (var sid in new[] { System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid, System.Security.Principal.WellKnownSidType.LocalSystemSid })
+                sec.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier(sid, null), full,
+                    inherit, System.Security.AccessControl.PropagationFlags.None, System.Security.AccessControl.AccessControlType.Allow));
+            sec.SetOwner(new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid, null));
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "NvTgpHold", "setup-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path.GetDirectoryName(dir));
+            var di = new DirectoryInfo(dir);
+            if (di.Exists) throw new IOException("staging folder already exists");
+            FileSystemAclExtensions.Create(di, sec);
+            return dir;
+        }
+
+        // Downloads the latest official PawnIO setup into an admin-only folder, keeps it open deny-write from the
+        // signature check through the end of the install so it can't be swapped, runs it (we're already elevated)
+        // and re-detects.
         public static bool InstallPawnIO(out string detail)
         {
             detail = "";
-            string dir = Path.Combine(Path.GetTempPath(), "NvTgpHold"), exe = Path.Combine(dir, "PawnIO_setup.exe");
+            string dir = null;
             try
             {
-                Directory.CreateDirectory(dir);
+                dir = CreateAdminOnlyDir();
+                string exe = Path.Combine(dir, "PawnIO_setup.exe");
                 using (var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(60) })
                 using (var resp = http.GetAsync(PawnIOSetupUrl).GetAwaiter().GetResult())
                 {
                     if (!resp.IsSuccessStatusCode) { detail = "download failed: HTTP " + (int)resp.StatusCode; return false; }
                     File.WriteAllBytes(exe, resp.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult());
                 }
-                if (!SignedByNamazso(exe, out detail)) { try { File.Delete(exe); } catch { } return false; }
-                using (var p = Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true }))
-                    p?.WaitForExit();
-                try { File.Delete(exe); } catch { }
+                using (var pin = new FileStream(exe, FileMode.Open, FileAccess.Read, FileShare.Read))   // no writer/deleter until we're done
+                {
+                    if (!SignedByNamazso(exe, out detail)) return false;
+                    using (var p = Process.Start(new ProcessStartInfo(exe) { UseShellExecute = false }))
+                        p?.WaitForExit();
+                }
                 Detect();
                 detail = NeedsPawnIO ? "PawnIO setup finished but PawnIOLib.dll is still missing" : (Supported ? "PawnIO installed" : Reason);
                 return !NeedsPawnIO;
             }
             catch (Exception ex) { detail = ex.Message; return false; }
+            finally { if (dir != null) try { Directory.Delete(dir, true); } catch { } }
         }
         public static long Retries, Failures;
 

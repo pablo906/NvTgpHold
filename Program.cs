@@ -44,6 +44,7 @@ namespace NvTgpHold
         private static System.Windows.Forms.Timer _autoTimer, _ecTimer;
         private const int EcLadderMs = 2000;               // the EC re-accumulates to step 1 in ~4 s, so reset every 2 s
         private static string _ecNote = "";
+        private static ToolStripMenuItem _ecMenu;
         private static Settings _settings = new Settings();
         private static CpuProfile _cpu;                     // active CPU profile, null = not asserting CPU limits
         private static string _cpuNote = "", _autoNote = "", _ghelper = "";
@@ -130,6 +131,7 @@ namespace NvTgpHold
                 };
                 ec.CheckedChanged += (s, e) => { _settings.EcLadder = ec.Checked; SettingsStore.Save(_settings); if (ec.Checked) { _ecTimer.Start(); EcTick(); } else { _ecTimer.Stop(); _ecNote = ""; } Refresh(); };
                 _cpuMenu.DropDownItems.Add(ec);
+                _ecMenu = ec;
                 if (EcLadder.NeedsPawnIO)
                 {
                     var inst = new ToolStripMenuItem("Install PawnIO (needed for the EC ladder hold)...");
@@ -327,6 +329,9 @@ namespace NvTgpHold
             _gpuPower = AtkAcpi.ReadGpuPower();
             if (pw && _gpuPower != 0) rp = "wrote 0 W, reads " + (_gpuPower < 0 ? "?" : _gpuPower + " W");
             _priorPower = -1;   // Restore defaults means stock, not the pre-hold value
+            // Stock means the EC's own ladder too: stop the hold and don't resume it on next launch.
+            _ecTimer?.Stop(); _ecNote = ""; _settings.EcLadder = false;
+            if (_ecMenu != null && _ecMenu.Checked) _ecMenu.Checked = false;
             _cpu = null; _settings.CpuProfile = ""; SettingsStore.Save(_settings); BoostMode.RestorePrior(); _cpuNote = "";
             _sync = "";
             _last = "restored to stock 95+25 (reboot to drop MAX)";

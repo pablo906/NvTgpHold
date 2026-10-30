@@ -205,11 +205,27 @@ namespace NvTgpHold
             return a;
         }
 
+        // NvTgpHold writes a wildcard header (bytes 0-4 = 0). mVolt+'s BIOS override uses the same value name with the
+        // vBIOS version in the header (e.g. 98 03 5C 00 86) and verifies it as its own, so don't overwrite or delete that.
+        public static string ForeignOwner()
+        {
+            try
+            {
+                using (var k = OpenGpuKey(false, out _))
+                    if (k?.GetValue("romOverride00") is byte[] v && v.Length >= 5 && (v[0] | v[1] | v[2] | v[3] | v[4]) != 0)
+                        return "romOverride00 belongs to another tool (likely mVolt+ BIOS override, header " + BitConverter.ToString(v, 0, 5).Replace("-", " ") + ")";
+            }
+            catch { }
+            return null;
+        }
+
         public static bool SetMax(int watts, int shadow, out string msg)
         {
             msg = "";
             try
             {
+                string foreign = ForeignOwner();
+                if (foreign != null) { msg = foreign + ". Change MAX there, or remove its override first."; return false; }
                 using (var k = OpenGpuKey(true, out string err))
                 {
                     if (k == null) { msg = err; return false; }
@@ -228,6 +244,8 @@ namespace NvTgpHold
             msg = "";
             try
             {
+                string foreign = ForeignOwner();
+                if (foreign != null) { msg = foreign + "; left in place."; return false; }
                 using (var k = OpenGpuKey(true, out string err))
                 {
                     if (k == null) { msg = err; return false; }

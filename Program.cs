@@ -126,10 +126,10 @@ namespace NvTgpHold
                 eff.CheckedChanged += (s, e) => { _settings.EfficientBoost = eff.Checked; SettingsStore.Save(_settings); if (!eff.Checked) BoostMode.RestorePrior(); ApplyCpu("boost mode"); Refresh(); };
                 _cpuMenu.DropDownItems.Add(eff);
                 _cpuMenu.DropDownItems.Add(new ToolStripSeparator());
-                var ec = new ToolStripMenuItem("Hold EC CPU ladder at step 0 (GA403WW BIOS 312, experimental)")
+                var ec = new ToolStripMenuItem("Hold EC CPU ladder (experimental)")
                 {
                     Checked = _settings.EcLadder && EcLadder.Supported, CheckOnClick = true, Enabled = EcLadder.Supported,
-                    ToolTipText = EcLadder.Supported ? EcTip : "Unavailable: " + EcLadder.Reason,
+                    ToolTipText = EcLadder.Supported ? "Experimental" : "Unavailable: " + EcLadder.Reason,
                 };
                 ec.CheckedChanged += (s, e) =>
                 {
@@ -149,7 +149,7 @@ namespace NvTgpHold
                                 "NvTgpHold", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
                         bool ok = EcLadder.InstallPawnIO(out string d);
                         ec.Enabled = EcLadder.Supported;
-                        ec.ToolTipText = EcLadder.Supported ? EcTip : "Unavailable: " + EcLadder.Reason;
+                        ec.ToolTipText = EcLadder.Supported ? "Experimental" : "Unavailable: " + EcLadder.Reason;
                         if (!EcLadder.NeedsPawnIO) inst.Visible = false;
                         _last = "PawnIO: " + d;
                         Balloon(_last);
@@ -487,12 +487,6 @@ namespace NvTgpHold
             "firmware or Windows EC command. Collisions are detected and retried where possible, but a byte that lands at\n" +
             "the wrong EC address cannot be undone (symptoms seen during testing: a fan mode reset).\n\n" +
             "Only enable this if you accept that. Details: docs/EC-Ladder.md.";
-
-        private const string EcTip =
-            "Every 2 s, zeroes the EC's throttle accumulators (the same bytes its own reset routine clears), so the CPU\n" +
-            "limit ladder stays at row 0 (80 W) instead of walking down to 26/19 W under GPU load.\n" +
-            "Uses PawnIO + LpcACPIEC (ports 0x62/0x66). Skips the write unless the EC is in ASUS mode 1 with the OS-present\n" +
-            "flag set. The CPU limit you get is still whatever the CPU profile / G-Helper sets below 80 W.";
 
         private static void CheckGHelper()
         {

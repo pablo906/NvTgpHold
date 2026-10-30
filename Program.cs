@@ -286,8 +286,22 @@ namespace NvTgpHold
                 if (!shadow.HasValue) return;
             }
             bool ok = RegMax.SetMax(watts, shadow.Value, out string msg);
-            if (ok) { _maxTargetW = watts; _last = "MAX " + watts + " W saved - REBOOT"; }
-            else _last = "MAX failed: " + msg;
+            if (!ok) { _last = "MAX failed: " + msg; Balloon(msg); Refresh(); return; }
+            _maxTargetW = watts; _last = "MAX " + watts + " W saved - REBOOT";
+            // The override is read when the driver shadows the vBIOS, so a GPU device restart applies it without a reboot.
+            if (MessageBox.Show("MAX " + watts + " W saved.\n\nRestart the NVIDIA GPU now to apply it without rebooting?\n" +
+                    "Close games and anything else running on the NVIDIA GPU first; the screen may flicker.",
+                    "NvTgpHold", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            {
+                _last = "restarting GPU..."; Refresh();
+                bool r = GpuRestart.Restart(out string rd);
+                System.Threading.Thread.Sleep(3000);   // let NVML come back before the poll reads MAX
+                PowerProbe.Read(out _, out double max, out _, out _);
+                bool applied = r && !double.IsNaN(max) && Math.Abs(max - watts) < 1;
+                _last = applied ? "MAX " + watts + " W active (GPU restarted)" : (r ? "GPU restarted, MAX reads " + (double.IsNaN(max) ? "?" : max.ToString("0", CultureInfo.InvariantCulture)) + " W - reboot if it stays" : "GPU restart failed: " + rd + " - REBOOT");
+                msg += "\n" + _last;
+                if (applied && _holdTargetW > 0) Reassert("MAX applied");
+            }
             Balloon(msg);
             Refresh();
         }

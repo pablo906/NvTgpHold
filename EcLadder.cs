@@ -128,7 +128,7 @@ namespace NvTgpHold
             catch (Exception ex) { detail = ex.Message; return false; }
             finally { if (dir != null) try { Directory.Delete(dir, true); } catch { } }
         }
-        public static long Retries, Failures;
+        public static long Failures;
 
         private sealed class EcTimeout : Exception { public EcTimeout(string m) : base(m) { } }
 
@@ -190,6 +190,9 @@ namespace NvTgpHold
             if (pawnio_execute(_h, "ioctl_pio_write", _in2, (UIntPtr)2, null, UIntPtr.Zero, out _) < 0) throw new EcTimeout("pio_write failed");
         }
 
+        // Idle = IBF, OBF, BURST and SCI_EVT all clear. SCI_EVT means ACPI.sys is about to issue a query, so we don't
+        // start a transaction under it; a pending OBF byte belongs to someone else and is never drained by us. Either
+        // way the attempt is abandoned and the slot loop retries after a short jittered wait.
         private static void WaitIdle()
         {
             var sw = Stopwatch.StartNew();
@@ -197,12 +200,12 @@ namespace NvTgpHold
             {
                 byte s = In(Cmd);
                 if ((s & (Ibf | Obf | Burst | SciEvt)) == 0) return;
-                // SCI_EVT stays up until ACPI.sys runs its query; don't wait on it for long.
-                if ((s & (Ibf | Obf | Burst)) == 0 && sw.Elapsed.TotalMilliseconds > IdleMs / 2) return;
-                if (sw.Elapsed.TotalMilliseconds > IdleMs) throw new EcTimeout("EC busy 0x" + s.ToString("X2"));
+                if (sw.Elapsed.TotalMilliseconds > IdleMs) throw new EcBusy("EC busy 0x" + s.ToString("X2"));
                 Thread.SpinWait(50);
             }
         }
+
+        private sealed class EcBusy : Exception { public EcBusy(string m) : base(m) { } }
 
         // Raised when the port state shows another EC user (ACPI.sys's EC driver or ASUS AML's ECMD) acted mid-transaction.
         private sealed class EcInterleave : Exception { public EcInterleave(string m) : base(m) { } }
@@ -224,89 +227,77 @@ namespace NvTgpHold
             while ((In(Cmd) & Obf) == 0) if (sw.Elapsed.TotalMilliseconds > StepMs) throw new EcTimeout("no OBF");
         }
 
+        // Single transactions, no per-byte retry: any failure abandons the attempt and the slot loop decides.
         private static byte Read(uint addr)
         {
-            for (int i = 0; ; i++)
-            {
-                try
-                {
-                    WaitIdle();
-                    Out(Cmd, 0x92); WaitIbf();
-                    Out(Data, (byte)(addr >> 8)); WaitIbf();
-                    Out(Data, (byte)addr); WaitObf();
-                    return In(Data);
-                }
-                catch (EcTimeout) { if (i >= 4) { Failures++; throw; } Retries++; Thread.Sleep(1); }
-            }
+            WaitIdle();
+            Out(Cmd, 0x92); WaitIbf();
+            Out(Data, (byte)(addr >> 8)); WaitIbf();
+            Out(Data, (byte)addr); WaitObf();
+            return In(Data);
         }
 
-        private static void Write(uint addr, byte v)
+        // 0x93 then a 0x92 readback of the same address. A mismatch is treated like a collision: the attempt is
+        // abandoned and retried, so a byte that landed elsewhere is never reported as done.
+        private static void WriteConfirmed(uint addr, byte v)
         {
-            for (int i = 0; ; i++)
-            {
-                try
-                {
-                    WaitIdle();
-                    Out(Cmd, 0x93); WaitIbf();
-                    Out(Data, (byte)(addr >> 8)); WaitIbf();
-                    Out(Data, (byte)addr); WaitIbf();
-                    Out(Data, v); WaitIbf();
-                    return;
-                }
-                catch (EcTimeout)
-                {
-                    if (i >= 4) { Failures++; throw; }
-                    Retries++; Thread.Sleep(1);
-                    try { if (Read(addr) == v) return; } catch (EcTimeout) { }
-                }
-            }
+            WaitIdle();
+            Out(Cmd, 0x93); WaitIbf();
+            Out(Data, (byte)(addr >> 8)); WaitIbf();
+            Out(Data, (byte)addr); WaitIbf();
+            Out(Data, v); WaitIbf();
+            byte back = Read(addr);
+            if (back != v) throw new EcInterleave("readback 0x" + addr.ToString("X6") + " = 0x" + back.ToString("X2") + ", wrote 0x" + v.ToString("X2"));
         }
 
-        // One hold tick. Returns false (and writes nothing) if the EC isn't in the traced state.
-        // On an interleave the tick yields the bus for a short random gap (the other owner's transaction is a few ms)
-        // and retries, up to 3 times. It never skips whole ticks: the ladder climbs a step every ~4-6 s, so a long
-        // back-off would let it escalate. Worst case one 2 s tick is missed and the next one catches it at step <= 1.
-        public static bool Reset(out string detail)
-        {
-            detail = "";
-            if (!Supported) { detail = Reason; return false; }
-            for (int attempt = 0; ; attempt++)
-            {
-                bool ok = ResetOnce(out detail, out bool interleaved);
-                if (ok || !interleaved) return ok;
-                Interleaves++;
-                if (attempt >= 2) { detail += " (gave up this tick after 3 tries)"; return false; }
-                Thread.Sleep(30 + _rng.Next(70));   // 30-100 ms, jittered so we don't re-collide in lockstep
-            }
-        }
+        public enum SlotResult { Done, Skipped, Failed }
 
         private static readonly Random _rng = new Random();
 
-        private static bool ResetOnce(out string detail, out bool interleaved)
+        // One 2 s slot of the hold (prior art: docs/EC-Ladder.md "Prior art"). Retries with flat 5-50 ms jitter until
+        // the deadline, not a fixed count: the budget is the slot, because the ladder steps every ~4-6 s. Jitter keeps
+        // the 2 s cadence from phase-locking with a periodic AML poll. Skipped = EC not in the traced state (no write).
+        public static SlotResult RunSlot(TimeSpan budget, out string detail)
         {
-            interleaved = false;
-            if (!Open(out detail)) return false;
+            detail = "";
+            if (!Supported) { detail = Reason; return SlotResult.Skipped; }
+            var sw = Stopwatch.StartNew();
+            int attempts = 0;
+            while (true)
+            {
+                attempts++;
+                var r = ResetOnce(out detail, out bool retryable);
+                if (r != SlotResult.Failed || !retryable) return r;
+                Interleaves++;
+                if (sw.Elapsed >= budget) { detail += " (no clean attempt in " + attempts + " tries this slot)"; Failures++; return SlotResult.Failed; }
+                Thread.Sleep(5 + _rng.Next(46));
+            }
+        }
+
+        private static SlotResult ResetOnce(out string detail, out bool retryable)
+        {
+            retryable = false;
+            if (!Open(out detail)) return SlotResult.Failed;
             bool locked = false;
             try
             {
-                try { locked = _mutex.WaitOne(500); } catch (AbandonedMutexException) { locked = true; }
-                if (!locked) { detail = "Access_EC busy"; return false; }
+                try { locked = _mutex.WaitOne(50); } catch (AbandonedMutexException) { locked = true; }
+                if (!locked) { retryable = true; detail = "Access_EC busy"; return SlotResult.Failed; }
                 int mode = Read(EcLadderTarget.ModeAddr), src = Read(EcLadderTarget.SourceAddr);
-                if (!EcLadderTarget.SafeToWrite(mode, src)) { detail = "skipped: mode " + mode + ", flags 0x" + src.ToString("X2"); return false; }
+                if (!EcLadderTarget.SafeToWrite(mode, src)) { detail = "skipped: mode " + mode + ", flags 0x" + src.ToString("X2"); return SlotResult.Skipped; }
                 int step = Read(EcLadderTarget.AppliedAddr), shadow = Read(EcLadderTarget.ShadowAddr);
-                // Write only bytes that aren't already in the reset state. Writes are the transactions where an
-                // interleave with ACPI.sys / ASUS AML (which can't be coordinated from user mode, see docs/EC-Ladder.md)
-                // could misplace a byte, so keep them to the minimum. No readback: these are live counters the EC can
-                // legitimately change between write and read, so a mismatch proves nothing.
+                // Only bytes not already in the reset state are written, so a retried attempt picks up where the last
+                // one stopped and writes (the transactions that could misplace a byte) stay minimal.
                 int writes = 0;
-                foreach (uint a in EcLadderTarget.ZeroAddrs) if (Read(a) != 0) { Write(a, 0); writes++; }
-                foreach (uint a in EcLadderTarget.Bit2Addrs) { byte v = Read(a); if (v != EcLadderTarget.ClearBit2(v)) { Write(a, EcLadderTarget.ClearBit2(v)); writes++; } }
+                foreach (uint a in EcLadderTarget.ZeroAddrs) if (Read(a) != 0) { WriteConfirmed(a, 0); writes++; }
+                foreach (uint a in EcLadderTarget.Bit2Addrs) { byte v = Read(a); if (v != EcLadderTarget.ClearBit2(v)) { WriteConfirmed(a, EcLadderTarget.ClearBit2(v)); writes++; } }
                 detail = "EC ladder was step " + step + " (" + shadow + " W), " + writes + " writes";
-                return true;
+                return SlotResult.Done;
             }
-            catch (EcInterleave ex) { interleaved = true; detail = "EC interleave (" + ex.Message + ")"; return false; }
-            catch (EcTimeout ex) { detail = "EC " + ex.Message; return false; }
-            catch (Exception ex) { detail = "EC " + ex.Message; return false; }
+            catch (EcInterleave ex) { retryable = true; detail = "EC interleave (" + ex.Message + ")"; return SlotResult.Failed; }
+            catch (EcBusy ex) { retryable = true; detail = ex.Message; return SlotResult.Failed; }
+            catch (EcTimeout ex) { retryable = true; detail = "EC " + ex.Message; return SlotResult.Failed; }
+            catch (Exception ex) { detail = "EC " + ex.Message; return SlotResult.Failed; }
             finally { if (locked) try { _mutex.ReleaseMutex(); } catch { } }
         }
     }

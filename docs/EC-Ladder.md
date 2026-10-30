@@ -122,12 +122,19 @@ Transport: ASUS vendor commands over the ACPI EC ports, through PawnIO's signed 
   EC driver, and ASUS's own AML (`ECMD`, which writes `ECCP`/`ECDP` directly under the AML-private `MUT0`). From user
   mode a multi-byte 0x92/0x93 transaction can't be made atomic against either of them, so a command from one of them
   can land between our address and value bytes. What the code does about it:
-  - waits for an idle EC (IBF/OBF/burst clear, SCI_EVT briefly) and bounds every handshake step (10 ms);
-  - treats OBF or BURST appearing while we're sending command/address bytes as an interleave: it releases the bus
-    for a jittered 30–100 ms and retries the tick, up to 3 times (counted in the status line). It never skips whole
-    ticks, because the ladder climbs a step every ~4–6 s; the worst case is one missed 2 s tick;
-  - writes only bytes that aren't already in the reset state, keeping writes to a minimum;
-  - never reads an OBF byte it didn't ask for, and retries on timeout.
+  - It takes `Global\Access_EC`, as LibreHardwareMonitor, FanControl and NBFC do, so cooperating tools don't overlap.
+  - It starts a transaction only when IBF, OBF, BURST **and SCI_EVT** are all clear. SCI_EVT means ACPI.sys is about
+    to issue a query. It never drains an OBF byte it didn't ask for, because that byte belongs to someone else.
+  - Every 0x93 write is confirmed with a 0x92 readback. If OBF or BURST appears while we're sending command or address
+    bytes, or a readback doesn't match, the attempt is treated as a collision.
+  - Retries are bounded by a deadline, not a count. The hold runs on a fixed 2 s slot, off the UI thread. Within a
+    slot it retries after a flat random 5–50 ms until 1.5 s into the slot, and the next slot starts on schedule. There
+    is no exponential back-off and no multi-second pause, because the ladder climbs a step every ~4–6 s. Jitter keeps
+    the cadence from phase-locking with a periodic AML poll.
+  - It writes only bytes that aren't already in the reset state, so a retried attempt resumes where the last one
+    stopped and writes stay minimal.
+  - A breaker trips only on a fault: **two slots in a row with no confirmed reset** (about 4 s). The hold then turns
+    itself off and says why. Slots skipped because the EC isn't in mode 1 / OS-present don't count.
 
   This narrows the window and detects most collisions after the fact. It does not eliminate them.
 
@@ -147,6 +154,34 @@ Transport: ASUS vendor commands over the ACPI EC ports, through PawnIO's signed 
   A tick is about 25 transactions from one process. An earlier test fired 70 back-to-back reads from 70 separate
   process launches, and that coincided with the EC's fan mode resetting, so keep EC access in one process at low
   rate.
+
+## Prior art
+
+Nobody on Windows has user-mode exclusion against ACPI.sys. The safe implementations go through the kernel EC
+driver or through AML. The rest take a named mutex, keep transactions short and retry.
+
+- **Linux `acpi_ec`** ([drivers/acpi/ec.c](https://github.com/torvalds/linux/blob/master/drivers/acpi/ec.c)):
+  owns 0x62/0x66 and serializes with `ec->mutex` plus the ACPI Global Lock (when `_GLK`). Vendor commands go through
+  `ec_transaction()` under the same locks. `ec_sys` only does 0x80/0x81, so it has no 0x92/0x93.
+- **Linux `asus-ec-sensors`**
+  ([drivers/hwmon/asus-ec-sensors.c](https://github.com/torvalds/linux/blob/master/drivers/hwmon/asus-ec-sensors.c)):
+  also takes the board's AML mutex or the Global Lock, because ASUS firmware touches the EC from ACPI without
+  declaring it.
+- **LibreHardwareMonitor / FanControl**
+  ([WindowsEmbeddedControllerIO.cs](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/blob/master/LibreHardwareMonitorLib/Hardware/Motherboard/Lpc/EC/WindowsEmbeddedControllerIO.cs)):
+  raw 0x62/0x66 under `Global\Access_EC` only, retried per byte.
+- **PawnIO `LpcACPIEC`** ([LpcACPIEC.p](https://github.com/namazso/PawnIO.Modules/blob/main/LpcACPIEC.p)): byte port
+  I/O only. The caller is expected to hold `Access_EC`.
+- **G-Helper / asusctl** ([AsusACPI.cs](https://github.com/seerge/g-helper/blob/main/app/AsusACPI.cs)): ATK
+  DSTS/DEVS through ACPI, so they're serialized for free but can't reach arbitrary EC RAM. On BIOS 312, G-Helper's
+  debug "ACPI DEVS Test" is a generic `DEVS(id, value)`, and none of the 93 WMNB DEVS handlers takes an address.
+- **Retry shape:** we take the jitter from AWS's
+  [Exponential Backoff and Jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/), but
+  not the exponential part. There's one contender, not a herd, and there's a hard deadline: one ladder step.
+
+Still not solved: a 0x93 interleaved after its command byte could land on a wrong address before the readback
+catches it. The complete fix is taking the ACPI Global Lock (FACS handshake) around the transaction in kernel
+mode, for example in a custom PawnIO module. It's unverified whether PawnIO lets a module map FACS.
 
 ## Measured result (BIOS 312)
 

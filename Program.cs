@@ -41,9 +41,12 @@ namespace NvTgpHold
         private static readonly int[] Presets = { 120, 130, 140, 150, 160, 175, 200, 225, 250 };
         private const int StockCurrentW = 95;
         private static ToolStripMenuItem _status, _holdMenu, _maxMenu, _syncMenu, _autoMenu, _intervalMenu, _cpuMenu;
-        private static System.Windows.Forms.Timer _autoTimer, _ecTimer;
-        private const int EcLadderMs = 2000;               // the EC re-accumulates to step 1 in ~4 s, so reset every 2 s
-        private static string _ecNote = "";
+        private static System.Windows.Forms.Timer _autoTimer;
+        private static readonly TimeSpan EcSlot = TimeSpan.FromSeconds(2);        // the ladder steps every ~4-6 s
+        private static readonly TimeSpan EcSlotBudget = TimeSpan.FromSeconds(1.5); // retry window inside a slot
+        private static volatile string _ecNote = "";
+        private static System.Threading.CancellationTokenSource _ecCts;
+        private static System.Threading.SynchronizationContext _ui;
         private static ToolStripMenuItem _ecMenu;
         private static Settings _settings = new Settings();
         private static CpuProfile _cpu;                     // active CPU profile, null = not asserting CPU limits
@@ -71,14 +74,13 @@ namespace NvTgpHold
             _autoTimer = new System.Windows.Forms.Timer { Interval = _settings.IntervalS * 1000 };
             _autoTimer.Tick += (s, e) => AutoTick();
             if (_settings.Auto) _autoTimer.Start();
-            _ecTimer = new System.Windows.Forms.Timer { Interval = EcLadderMs };
-            _ecTimer.Tick += (s, e) => EcTick();
-            if (_settings.EcLadder && EcLadder.Supported) _ecTimer.Start();
+            _ui = System.Threading.SynchronizationContext.Current;
+            if (_settings.EcLadder && EcLadder.Supported) StartEcHold();
             SystemEvents.PowerModeChanged += (s, e) => { if (_holdTargetW > 0) Reassert("power " + e.Mode); ApplyCpu("power " + e.Mode); };
             SystemEvents.SessionSwitch += (s, e) => { if (e.Reason != SessionSwitchReason.SessionUnlock) return; if (_holdTargetW > 0) Reassert("resume"); ApplyCpu("resume"); };
             if (CpuInfo.StrixPoint && CpuProfiles.Find(_settings.CpuProfile) != null) SetCpuProfile(CpuProfiles.Find(_settings.CpuProfile));
             Refresh();
-            Application.ApplicationExit += (s, e) => { RestorePrior("exit"); BoostMode.RestorePrior(); _ecTimer?.Stop(); EcLadder.Close(); if (_tray != null) _tray.Visible = false; };
+            Application.ApplicationExit += (s, e) => { RestorePrior("exit"); BoostMode.RestorePrior(); StopEcHold(exiting: true); if (_tray != null) _tray.Visible = false; };
             Application.Run();
         }
 
@@ -129,7 +131,7 @@ namespace NvTgpHold
                     Checked = _settings.EcLadder && EcLadder.Supported, CheckOnClick = true, Enabled = EcLadder.Supported,
                     ToolTipText = EcLadder.Supported ? EcTip : "Unavailable: " + EcLadder.Reason,
                 };
-                ec.CheckedChanged += (s, e) => { _settings.EcLadder = ec.Checked; SettingsStore.Save(_settings); if (ec.Checked) { _ecTimer.Start(); EcTick(); } else { _ecTimer.Stop(); _ecNote = ""; } Refresh(); };
+                ec.CheckedChanged += (s, e) => { _settings.EcLadder = ec.Checked; SettingsStore.Save(_settings); if (ec.Checked) StartEcHold(); else { StopEcHold(); _ecNote = ""; } Refresh(); };
                 _cpuMenu.DropDownItems.Add(ec);
                 _ecMenu = ec;
                 if (EcLadder.NeedsPawnIO)
@@ -362,7 +364,7 @@ namespace NvTgpHold
             if (pw && _gpuPower != 0) rp = "wrote 0 W, reads " + (_gpuPower < 0 ? "?" : _gpuPower + " W");
             _priorPower = -1;   // Restore defaults means stock, not the pre-hold value
             // Stock means the EC's own ladder too: stop the hold and don't resume it on next launch.
-            _ecTimer?.Stop(); _ecNote = ""; _settings.EcLadder = false;
+            StopEcHold(); _ecNote = ""; _settings.EcLadder = false;
             if (_ecMenu != null && _ecMenu.Checked) _ecMenu.Checked = false;
             _cpu = null; _settings.CpuProfile = ""; SettingsStore.Save(_settings); BoostMode.RestorePrior(); _cpuNote = "";
             _sync = "";
@@ -411,12 +413,53 @@ namespace NvTgpHold
             _autoNote = "auto #" + _autoTicks + " " + DateTime.Now.ToString("HH:mm:ss") + (gpu.Length > 0 ? " " + gpu : "") + (_cpu != null ? (cpu ? " CPU ok" : " CPU failed") : "");
         }
 
-        // Own 2 s timer, independent of Auto re-assert: the ladder has to be reset faster than the EC re-accumulates.
-        private static void EcTick()
+        // Own worker on a fixed 2 s slot, independent of Auto re-assert and off the UI thread (a slot may spend up to
+        // 1.5 s retrying). Breaker: two slots in a row with no clean, confirmed attempt is a fault, not contention, so the
+        // hold switches itself off and says so. Skipped slots (EC not in mode 1 / OS-present) don't count.
+        private static void StartEcHold()
         {
-            if (!_settings.EcLadder) return;
-            bool ok = EcLadder.Reset(out string d);
-            _ecNote = (ok ? d : "EC hold: " + d) + (EcLadder.Failures > 0 ? ", " + EcLadder.Failures + " EC failures" : "");
+            if (_ecCts != null) return;
+            _ecTask?.Wait(2500);   // previous worker finishing its slot
+            var cts = new System.Threading.CancellationTokenSource();
+            _ecCts = cts;
+            var task = System.Threading.Tasks.Task.Run(() =>
+            {
+                int failedSlots = 0;
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                for (long slot = 0; !cts.IsCancellationRequested; slot++)
+                {
+                    var r = EcLadder.RunSlot(EcSlotBudget, out string d);
+                    failedSlots = r == EcLadder.SlotResult.Failed ? failedSlots + 1 : 0;
+                    _ecNote = (r == EcLadder.SlotResult.Done ? d : "EC hold: " + d) + (EcLadder.Interleaves > 0 ? ", " + EcLadder.Interleaves + " retries" : "");
+                    if (failedSlots >= 2)
+                    {
+                        string why = "EC hold stopped: no confirmed reset in 2 slots (" + d + ")";
+                        _ecNote = why;
+                        _ui?.Post(_ =>
+                        {
+                            _ecCts = null; _settings.EcLadder = false; SettingsStore.Save(_settings);
+                            if (_ecMenu != null && _ecMenu.Checked) _ecMenu.Checked = false;
+                            _ecNote = why; Balloon(why); Refresh();
+                        }, null);
+                        break;
+                    }
+                    var wait = TimeSpan.FromTicks(EcSlot.Ticks * (slot + 1)) - clock.Elapsed;   // next slot on schedule
+                    if (wait > TimeSpan.Zero) cts.Token.WaitHandle.WaitOne(wait);
+                }
+            });
+            _ecTask = task;
+        }
+
+        private static System.Threading.Tasks.Task _ecTask;
+
+        // The PawnIO handle stays open while the app runs (it's only closed on exit), so a stop followed by a quick
+        // re-enable can't close a handle the new worker is using. A restart waits for the old worker's slot to end.
+        private static void StopEcHold(bool exiting = false)
+        {
+            var cts = _ecCts;
+            _ecCts = null;
+            cts?.Cancel();
+            if (exiting) { _ecTask?.Wait(2500); EcLadder.Close(); }
         }
 
         private const string EcTip =

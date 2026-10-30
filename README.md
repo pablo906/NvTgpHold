@@ -28,7 +28,7 @@ See [Installation](docs/Installation.md) for upgrading and optional startup task
 | Set MAX ceiling | Save a persistent ceiling override; apply it with an offered GPU restart or a reboot. A vBIOS dump is read once to locate the field; nothing is flashed. |
 | NVPCF sync | Match the ASUS platform power setting to the hold target, with readback and prior-value restoration. |
 | Auto re-assert | Optionally resend the GPU hold and CPU profile every 1–30 seconds; default interval is 2 seconds. |
-| CPU power profiles | Apply 28 / 35 / 45 W sustained CPU profiles on AMD Strix Point, with optional Windows Efficient Enabled boost mode. |
+| CPU power profiles | Apply 18 / 28 / 35 / 45 W sustained CPU profiles on AMD Strix Point, with optional Windows Efficient Enabled boost mode. |
 | Experimental EC CPU ladder hold | On GA403WW BIOS 312 only, periodically reset EC throttle accumulators. Requires PawnIO and explicit opt-in. |
 
 Menu presets are available targets, **not validated safe power ratings** for your

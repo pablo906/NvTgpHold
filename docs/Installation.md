@@ -13,12 +13,12 @@ PawnIO is optional for all other features.
 
 ## Download and verify
 
-1. Download `NvTgpHold-v1.1.2-win-x64.zip` from the official
+1. Download `NvTgpHold-v1.1.3-win-x64.zip` from the official
    [release page](https://github.com/pablo906/NvTgpHold/releases/latest).
 2. In PowerShell, calculate the checksum and compare it with that release's notes:
 
    ```powershell
-   Get-FileHash .\NvTgpHold-v1.1.2-win-x64.zip -Algorithm SHA256
+   Get-FileHash .\NvTgpHold-v1.1.3-win-x64.zip -Algorithm SHA256
    ```
 
 3. Extract the entire ZIP to a folder you control, such as `C:\Tools\NvTgpHold`.

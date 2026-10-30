@@ -100,6 +100,7 @@ Shown only on detected AMD Strix Point CPUs, such as Ryzen AI 9 HX 370.
 
 | Profile | SPL: sustained | SPPT: slow | FPPT: fast |
 |---|---|---|---|
+| 18 W | 18 W | 23 W | 28 W |
 | 28 W | 28 W | 35 W | 45 W |
 | 35 W | 35 W | 50 W | 65 W |
 | 45 W | 45 W | 65 W | 90 W |

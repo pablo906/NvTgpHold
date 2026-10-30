@@ -204,10 +204,18 @@ namespace NvTgpHold
             }
         }
 
+        // Raised when the port state shows another EC user (ACPI.sys's EC driver or ASUS AML's ECMD) acted mid-transaction.
+        private sealed class EcInterleave : Exception { public EcInterleave(string m) : base(m) { } }
+        public static long Interleaves;
+
+        // While we're sending command/address bytes nothing should be in the output buffer: OBF set here means someone
+        // else's command produced data during our transaction, so our bytes may have been taken as theirs or vice versa.
         private static void WaitIbf()
         {
             var sw = Stopwatch.StartNew();
-            while ((In(Cmd) & Ibf) != 0) if (sw.Elapsed.TotalMilliseconds > StepMs) throw new EcTimeout("IBF stuck");
+            byte s;
+            while (((s = In(Cmd)) & Ibf) != 0) if (sw.Elapsed.TotalMilliseconds > StepMs) throw new EcTimeout("IBF stuck");
+            if ((s & (Obf | Burst)) != 0) throw new EcInterleave("unexpected status 0x" + s.ToString("X2"));
         }
 
         private static void WaitObf()
@@ -254,11 +262,15 @@ namespace NvTgpHold
             }
         }
 
+        private const int BackoffTicks = 5;     // after an interleave, stay off the bus for ~10 s
+        private static int _backoff;
+
         // One hold tick. Returns false (and writes nothing) if the EC isn't in the traced state.
         public static bool Reset(out string detail)
         {
             detail = "";
             if (!Supported) { detail = Reason; return false; }
+            if (_backoff > 0) { _backoff--; detail = "backing off after an EC interleave (" + Interleaves + " so far)"; return false; }
             if (!Open(out detail)) return false;
             bool locked = false;
             try
@@ -268,11 +280,17 @@ namespace NvTgpHold
                 int mode = Read(EcLadderTarget.ModeAddr), src = Read(EcLadderTarget.SourceAddr);
                 if (!EcLadderTarget.SafeToWrite(mode, src)) { detail = "skipped: mode " + mode + ", flags 0x" + src.ToString("X2"); return false; }
                 int step = Read(EcLadderTarget.AppliedAddr), shadow = Read(EcLadderTarget.ShadowAddr);
-                foreach (uint a in EcLadderTarget.ZeroAddrs) Write(a, 0);
-                foreach (uint a in EcLadderTarget.Bit2Addrs) { byte v = Read(a); if (v != EcLadderTarget.ClearBit2(v)) Write(a, EcLadderTarget.ClearBit2(v)); }
-                detail = "EC ladder was step " + step + " (" + shadow + " W)";
+                // Write only bytes that aren't already in the reset state. Writes are the transactions where an
+                // interleave with ACPI.sys / ASUS AML (which can't be coordinated from user mode, see docs/EC-Ladder.md)
+                // could misplace a byte, so keep them to the minimum. No readback: these are live counters the EC can
+                // legitimately change between write and read, so a mismatch proves nothing.
+                int writes = 0;
+                foreach (uint a in EcLadderTarget.ZeroAddrs) if (Read(a) != 0) { Write(a, 0); writes++; }
+                foreach (uint a in EcLadderTarget.Bit2Addrs) { byte v = Read(a); if (v != EcLadderTarget.ClearBit2(v)) { Write(a, EcLadderTarget.ClearBit2(v)); writes++; } }
+                detail = "EC ladder was step " + step + " (" + shadow + " W), " + writes + " writes";
                 return true;
             }
+            catch (EcInterleave ex) { Interleaves++; _backoff = BackoffTicks; detail = "EC interleave (" + ex.Message + "), pausing 10 s"; return false; }
             catch (EcTimeout ex) { detail = "EC " + ex.Message; return false; }
             catch (Exception ex) { detail = "EC " + ex.Message; return false; }
             finally { if (locked) try { _mutex.ReleaseMutex(); } catch { } }

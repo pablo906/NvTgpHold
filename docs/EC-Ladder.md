@@ -118,11 +118,19 @@ Transport: ASUS vendor commands over the ACPI EC ports, through PawnIO's signed 
   - PawnIO and the module present.
   - At runtime, mode 1 with OS-present set. Any other mode uses a different table family and different thresholds,
     so we skip.
-- **Bus discipline.** ACPI.sys drives the same ports and doesn't take the `Access_EC` mutant. Each transaction:
-  - waits for an idle EC (IBF/OBF/burst clear, SCI_EVT briefly);
-  - bounds every handshake step (10 ms);
-  - never reads an OBF byte it didn't ask for;
-  - retries on timeout, and on a write timeout reads back before rewriting.
+- **Bus discipline, and its limit.** Two other owners drive ports `0x62/0x66` without taking `Access_EC`: ACPI.sys's
+  EC driver, and ASUS's own AML (`ECMD`, which writes `ECCP`/`ECDP` directly under the AML-private `MUT0`). From user
+  mode a multi-byte 0x92/0x93 transaction can't be made atomic against either of them, so a command from one of them
+  can land between our address and value bytes. What the code does about it:
+  - waits for an idle EC (IBF/OBF/burst clear, SCI_EVT briefly) and bounds every handshake step (10 ms);
+  - treats OBF or BURST appearing while we're sending command/address bytes as an interleave: it abandons the tick
+    and stays off the bus for 10 s (counted in the status line);
+  - writes only bytes that aren't already in the reset state, keeping writes to a minimum;
+  - never reads an OBF byte it didn't ask for, and retries on timeout.
+
+  This narrows the window and detects most collisions after the fact. It does not eliminate them. A coordinated path
+  would mean issuing the transaction inside AML under `MUT0` through an ATK method, if one reaches `ECMD`; that's
+  still open.
 
   A tick is about 25 transactions from one process. An earlier test fired 70 back-to-back reads from 70 separate
   process launches, and that coincided with the EC's fan mode resetting, so keep EC access in one process at low

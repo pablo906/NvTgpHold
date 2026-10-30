@@ -183,6 +183,16 @@ values stay until the next ASUS or G-Helper mode change.
 to *Efficient Enabled* on the active power plan, for both AC and battery. The previous mode is put
 back when you uncheck it, choose **Off**, use *Restore defaults*, or exit.
 
+**Hold EC CPU ladder at step 0 (GA403WW BIOS 312)** is enabled only on a GA403WW running BIOS 312
+with PawnIO installed. Under sustained GPU load the EC walks its own CPU limit table down (80 W at
+row 0, then 35/30/26/19 W...) and writes each row to the SMU, independent of the profile above. Every
+2 s, on its own timer, this zeroes the EC's throttle accumulators through EC RAM (vendor commands
+0x92/0x93 on ports 0x62/0x66 via PawnIO's signed `LpcACPIEC` module), so the table stays at row 0.
+It writes only while the EC is in ASUS mode 1 with the OS-present flag set, and never writes that flag.
+The status line shows the step it found each tick (`EC ladder was step N (W)`); step 0 means the hold is
+keeping up. Measured on 2026-10-30: without it the step sat at 2–4 under a 110–150 W GPU load; with it,
+2,400 of 2,400 one-second samples read step 0 with no EC errors.
+
 ### Stop holding
 Stops re-applying CURRENT. The current value stays until the driver or platform changes it,
 which usually happens at the next power event. Dynamic Boost stays off.

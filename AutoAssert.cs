@@ -69,6 +69,7 @@ namespace NvTgpHold
         public int IntervalS = ReassertInterval.DefaultS;
         public string CpuProfile = "";     // "" = off
         public bool EfficientBoost = true;
+        public bool EcLadder;              // hold the EC CPU ladder at step 0 (GA403WW BIOS 312 only)
 
         public static Settings Parse(IEnumerable<string> lines)
         {
@@ -85,6 +86,7 @@ namespace NvTgpHold
                     case "interval": if (int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n)) s.IntervalS = ReassertInterval.Clamp(n); break;
                     case "cpu": s.CpuProfile = CpuProfiles.Find(v)?.Name ?? ""; break;
                     case "effboost": s.EfficientBoost = v != "0"; break;
+                    case "ecladder": s.EcLadder = v == "1"; break;
                 }
             }
             return s;
@@ -96,6 +98,7 @@ namespace NvTgpHold
             "interval=" + IntervalS.ToString(CultureInfo.InvariantCulture),
             "cpu=" + CpuProfile,
             "effboost=" + (EfficientBoost ? "1" : "0"),
+            "ecladder=" + (EcLadder ? "1" : "0"),
         };
     }
 

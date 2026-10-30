@@ -39,7 +39,9 @@ namespace NvTgpHold
         private static readonly int[] Presets = { 120, 130, 140, 150, 160, 175, 200, 225, 250 };
         private const int StockCurrentW = 95;
         private static ToolStripMenuItem _status, _holdMenu, _maxMenu, _syncMenu, _autoMenu, _intervalMenu, _cpuMenu;
-        private static System.Windows.Forms.Timer _autoTimer;
+        private static System.Windows.Forms.Timer _autoTimer, _ecTimer;
+        private const int EcLadderMs = 2000;               // the EC re-accumulates to step 1 in ~4 s, so reset every 2 s
+        private static string _ecNote = "";
         private static Settings _settings = new Settings();
         private static CpuProfile _cpu;                     // active CPU profile, null = not asserting CPU limits
         private static string _cpuNote = "", _autoNote = "", _ghelper = "";
@@ -53,6 +55,7 @@ namespace NvTgpHold
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             CpuInfo.Detect();
+            EcLadder.Detect();
             _settings = SettingsStore.Load();
             _tray = new NotifyIcon { Icon = AppIcon.Load(), Visible = true, Text = "NvTgpHold" };
             _tray.ContextMenuStrip = BuildMenu();
@@ -65,11 +68,14 @@ namespace NvTgpHold
             _autoTimer = new System.Windows.Forms.Timer { Interval = _settings.IntervalS * 1000 };
             _autoTimer.Tick += (s, e) => AutoTick();
             if (_settings.Auto) _autoTimer.Start();
+            _ecTimer = new System.Windows.Forms.Timer { Interval = EcLadderMs };
+            _ecTimer.Tick += (s, e) => EcTick();
+            if (_settings.EcLadder && EcLadder.Supported) _ecTimer.Start();
             SystemEvents.PowerModeChanged += (s, e) => { if (_holdTargetW > 0) Reassert("power " + e.Mode); ApplyCpu("power " + e.Mode); };
             SystemEvents.SessionSwitch += (s, e) => { if (e.Reason != SessionSwitchReason.SessionUnlock) return; if (_holdTargetW > 0) Reassert("resume"); ApplyCpu("resume"); };
             if (CpuInfo.StrixPoint && CpuProfiles.Find(_settings.CpuProfile) != null) SetCpuProfile(CpuProfiles.Find(_settings.CpuProfile));
             Refresh();
-            Application.ApplicationExit += (s, e) => { RestorePrior("exit"); BoostMode.RestorePrior(); if (_tray != null) _tray.Visible = false; };
+            Application.ApplicationExit += (s, e) => { RestorePrior("exit"); BoostMode.RestorePrior(); _ecTimer?.Stop(); EcLadder.Close(); if (_tray != null) _tray.Visible = false; };
             Application.Run();
         }
 
@@ -114,6 +120,14 @@ namespace NvTgpHold
                 var eff = new ToolStripMenuItem("Efficient Enabled boost mode") { Checked = _settings.EfficientBoost, CheckOnClick = true };
                 eff.CheckedChanged += (s, e) => { _settings.EfficientBoost = eff.Checked; SettingsStore.Save(_settings); if (!eff.Checked) BoostMode.RestorePrior(); ApplyCpu("boost mode"); Refresh(); };
                 _cpuMenu.DropDownItems.Add(eff);
+                _cpuMenu.DropDownItems.Add(new ToolStripSeparator());
+                var ec = new ToolStripMenuItem("Hold EC CPU ladder at step 0 (GA403WW BIOS 312)")
+                {
+                    Checked = _settings.EcLadder && EcLadder.Supported, CheckOnClick = true, Enabled = EcLadder.Supported,
+                    ToolTipText = EcLadder.Supported ? EcTip : "Unavailable: " + EcLadder.Reason,
+                };
+                ec.CheckedChanged += (s, e) => { _settings.EcLadder = ec.Checked; SettingsStore.Save(_settings); if (ec.Checked) { _ecTimer.Start(); EcTick(); } else { _ecTimer.Stop(); _ecNote = ""; } Refresh(); };
+                _cpuMenu.DropDownItems.Add(ec);
                 m.Items.Add(_cpuMenu);
             }
             m.Items.Add(new ToolStripMenuItem("Stop holding", null, (s, e) => { _holdTargetW = 0; _holdTimer.Stop(); RestorePrior("hold released"); _last = "hold released"; Refresh(); }));
@@ -317,6 +331,20 @@ namespace NvTgpHold
             _autoNote = "auto #" + _autoTicks + " " + DateTime.Now.ToString("HH:mm:ss") + (gpu.Length > 0 ? " " + gpu : "") + (_cpu != null ? (cpu ? " CPU ok" : " CPU failed") : "");
         }
 
+        // Own 2 s timer, independent of Auto re-assert: the ladder has to be reset faster than the EC re-accumulates.
+        private static void EcTick()
+        {
+            if (!_settings.EcLadder) return;
+            bool ok = EcLadder.Reset(out string d);
+            _ecNote = (ok ? d : "EC hold: " + d) + (EcLadder.Failures > 0 ? ", " + EcLadder.Failures + " EC failures" : "");
+        }
+
+        private const string EcTip =
+            "Every 2 s, zeroes the EC's throttle accumulators (the same bytes its own reset routine clears), so the CPU\n" +
+            "limit ladder stays at row 0 (80 W) instead of walking down to 26/19 W under GPU load.\n" +
+            "Uses PawnIO + LpcACPIEC (ports 0x62/0x66). Skips the write unless the EC is in ASUS mode 1 with the OS-present\n" +
+            "flag set. The CPU limit you get is still whatever the CPU profile / G-Helper sets below 80 W.";
+
         private static void CheckGHelper()
         {
             if ((DateTime.UtcNow - _lastGhCheck).TotalSeconds < 30) return;
@@ -368,7 +396,7 @@ namespace NvTgpHold
             string mx = double.IsNaN(_max) ? "?" : _max.ToString("0", CultureInfo.InvariantCulture);
             string hold = _holdTargetW > 0 ? ("HOLD " + _holdTargetW + " W") : "hold off";
             string nv = (_gpuBase >= 0 ? _gpuBase.ToString(CultureInfo.InvariantCulture) : "?") + "+" + (_gpuPower >= 0 ? _gpuPower.ToString(CultureInfo.InvariantCulture) : "?");
-            string extra = (_cpuNote.Length > 0 ? "  |  " + _cpuNote : "") + (_settings.Auto ? "  |  every " + _settings.IntervalS + " s" + (_autoNote.Length > 0 ? ", " + _autoNote : "") : "") + (_ghelper.Length > 0 ? "  |  " + _ghelper : "");
+            string extra = (_cpuNote.Length > 0 ? "  |  " + _cpuNote : "") + (_ecNote.Length > 0 ? "  |  " + _ecNote : "") + (_settings.Auto ? "  |  every " + _settings.IntervalS + " s" + (_autoNote.Length > 0 ? ", " + _autoNote : "") : "") + (_ghelper.Length > 0 ? "  |  " + _ghelper : "");
             if (_status != null) _status.Text = hold + "  |  enf " + enf + " / max " + mx + " W  |  NVPCF " + nv + " W" + (_sync.Length > 0 ? " (" + _sync + ")" : "") + "  |  " + _last + extra;
             if (_intervalMenu != null) foreach (ToolStripMenuItem it in _intervalMenu.DropDownItems) it.Checked = (int)it.Tag == _settings.IntervalS;
             if (_cpuMenu != null) foreach (ToolStripItem it in _cpuMenu.DropDownItems) if (it is ToolStripMenuItem mi && !mi.CheckOnClick) mi.Checked = (mi.Tag as string) == (_cpu?.Name) || (mi.Tag == null && _cpu == null);

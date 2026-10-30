@@ -21,7 +21,7 @@ namespace NvTgpHold
         public static readonly CpuProfile[] Presets =
         {
             new CpuProfile("28 W", 28, 35, 45),
-            new CpuProfile("35 W", 35, 45, 55),
+            new CpuProfile("35 W", 35, 50, 65),
             new CpuProfile("45 W", 45, 65, 90),
         };
         public const int MinW = 5, MaxW = 90;

@@ -168,7 +168,7 @@ uses, fast first:
 | Profile | SPL (sustained, `0x001200A3`) | SPPT (slow, `0x001200A0`) | FPPT (fast, `0x001200C1`) |
 |---|---|---|---|
 | 28 W | 28 | 35 | 45 |
-| 35 W | 35 | 45 | 55 |
+| 35 W | 35 | 50 | 65 |
 | 45 W | 45 | 65 | 90 |
 
 Picking a profile applies it once, and again after power and resume events. With *Auto re-assert*

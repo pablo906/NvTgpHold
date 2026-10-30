@@ -20,6 +20,7 @@ namespace NvTgpHold
         // SPL = sustained (STAPM), SPPT = slow, FPPT = fast.
         public static readonly CpuProfile[] Presets =
         {
+            new CpuProfile("18 W", 18, 23, 28),
             new CpuProfile("28 W", 28, 35, 45),
             new CpuProfile("35 W", 35, 50, 65),
             new CpuProfile("45 W", 45, 65, 90),

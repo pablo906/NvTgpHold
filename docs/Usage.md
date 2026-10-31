@@ -56,13 +56,15 @@ overwrite each other. The active profile and its CPU limits are restored on laun
 These are **off by default and opt-in**, each behind a consent dialog, like the EC
 ladder hold. They are under **Power profile → Experimental expansions**.
 
-- **GPU core/memory overclock** (NvAPI). Two ways: the **GPU overclock** picker applies
-  a core offset (25 MHz steps, 100-300) and a memory offset (300-3000 in set steps)
-  immediately; or the "Apply GPU OC from profile" toggle applies the active profile's
-  offsets (NvTgpHold-Manual is +100 core / +1000 memory). Offsets reset on reboot and
-  "0" clears them. Nothing is flashed. Too high an offset causes artifacts or a reset.
-  (Per-domain xbar/sys/video overclock and undervolt, mVolt+ style, are not implemented
-  here — they go through NVIDIA's private clock-domain interface.)
+- **GPU overclock** (NvAPI public clock domains). The **GPU overclock** picker applies a
+  core offset (25 MHz steps, 100-300), a memory offset (300-3000 in set steps), or a
+  video-clock offset (100-300) immediately; or the "Apply GPU OC from profile" toggle
+  applies the active profile's core/memory offsets (NvTgpHold-Manual is +100 core /
+  +1000 memory). Offsets reset on reboot and "0" clears them. Nothing is flashed. Too
+  high an offset causes artifacts or a reset. (The **xbar/sys** clock domains and the
+  per-domain **voltage-demand undervolt** that mVolt+ exposes are not implemented here:
+  they use NVIDIA's private interface and mVolt+ is closed-source, so there is no
+  published method to follow.)
 - **CPU undervolt + temperature** (Ryzen SMU, via PawnIO and the signed `RyzenSMU.bin`
   module next to the exe). While on, selecting a profile also sets its CPU temperature
   limit and all-core Curve Optimizer offset through the SMU. Applied on profile select

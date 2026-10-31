@@ -8,7 +8,9 @@ namespace NvTgpHold
     // A MUX change (into or out of Ultimate) only takes effect after a reboot. An Eco toggle does not reboot, but the
     // display stack re-initialises, so a sign-out or reboot is recommended for a clean switch. Experimental: NvTgpHold
     // does not do G-Helper's full NVIDIA-service teardown around an Eco change.
-    internal enum GpuDisplayMode { Eco, Standard, Ultimate }
+    // Optimized = Standard dGPU-on with auto-eco on battery (the policy is tracked in Settings and applied on power
+    // events by Program); for the hardware action it is the same as Standard.
+    internal enum GpuDisplayMode { Eco, Standard, Ultimate, Optimized }
 
     internal static class GpuMode
     {
@@ -44,13 +46,14 @@ namespace NvTgpHold
                     needsReboot = true; detail = "Ultimate set (" + detail + ") - reboot to apply"; return true;
 
                 case GpuDisplayMode.Standard:
+                case GpuDisplayMode.Optimized:   // same hardware action as Standard; the auto-eco policy is applied by Program
                     if (mux == 0)   // leaving Ultimate: MUX change + reboot
                     {
                         if (!AtkAcpi.SetGpuMux(1, out detail)) return false;
-                        needsReboot = true; detail = "Standard set (" + detail + ") - reboot to apply"; return true;
+                        needsReboot = true; detail = target + " set (" + detail + ") - reboot to apply"; return true;
                     }
                     if (!AtkAcpi.SetGpuEco(0, out detail)) return false;   // hybrid, just turn Eco off
-                    detail = "Standard set (" + detail + ")"; return true;
+                    detail = target + " set (" + detail + ")"; return true;
 
                 case GpuDisplayMode.Eco:
                     if (mux == 0) { detail = "switch to Standard first (needs a reboot), then Eco"; return false; }

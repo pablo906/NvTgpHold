@@ -792,7 +792,19 @@ namespace NvTgpHold
                 success &= AtkAcpi.SetGpuPower(p.GpuPower, out string pd);
                 notes.Append(", ").Append(bd).Append(", ").Append(pd);
             }
-            else notes.Append(", GPU power/boost held by CURRENT hold");
+            else
+            {
+                // A CURRENT hold owns GPU TGP + Dynamic Boost. SetMode above reloaded the ASUS mode's power table,
+                // which re-enables Dynamic Boost and resets NVPCF to the mode default - and boost-ON re-advertises over
+                // a held CURRENT. So re-assert the hold here (boost off, NVPCF sync, E633) instead of leaving the GPU at
+                // the mode default and relying on the 3 s poll; otherwise applying a profile silently drops the hold.
+                AtkAcpi.SetBoost(HoldBoost, out string hb);
+                if (_syncTgp) SyncTgp("profile " + p.Name);
+                System.Threading.Thread.Sleep(250);          // let the boost toggle settle before E633 (as DoHold/Reassert do)
+                bool held = ApplyCurrent(_holdTargetW, out string hc);
+                success &= held; _lastReassert = DateTime.UtcNow;
+                notes.Append(held ? ", hold re-asserted " + _holdTargetW + " W over profile" : ", hold re-assert FAIL: " + hc).Append(" (boost " + hb + ")");
+            }
             // Experimental, opt-in, full apply only (never the fast re-assert): GPU clock offset (NVAPI) and CPU temp +
             // undervolt (Ryzen SMU). Each is skipped unless its toggle is on; a failure is reported, not fatal.
             if (full && _settings.GpuOc)

@@ -68,6 +68,8 @@ ladder hold. They are under **Power profile → Experimental expansions**.
   +1000 memory). Offsets reset on reboot and "0" clears them. Nothing is flashed. Too
   high an offset causes artifacts or a reset. A driver can reject a requested domain;
   an error is reported rather than establishing that the offset was applied.
+  Changing core or memory retains the other domain's last accepted offset, including
+  an offset applied by a profile. Rejected changes leave the previous menu values in place.
   Crossbar/system clock offsets and per-domain voltage-demand undervolting are not supported.
 - **CPU undervolt + temperature** (Ryzen SMU, via PawnIO and the signed `RyzenSMU.bin`
   module next to the exe). While on, selecting a profile also sets its CPU temperature
@@ -84,6 +86,8 @@ ladder hold. They are under **Power profile → Experimental expansions**.
   and Standard re-initialise the display (sign out or reboot for a clean switch).
   Optimized keeps the dGPU on while on AC and switches to Eco (iGPU only) on battery,
   applied automatically on power and resume events.
+  A failed mode selection leaves the existing automatic policy enabled or disabled
+  as before. An accepted MUX change still needs the offered reboot.
 
 Do not run the experimental EC CPU ladder hold at the same time as a profile — both can
 touch the EC fan state.

@@ -82,6 +82,7 @@ namespace NvTgpHold
         public static bool SetMode(int mode, out string detail)
         {
             if (!Call(Devs, PerfModeId, (uint)mode, out uint r, out detail)) return false;
+            if (r != 1) { detail = "ASUS rejected the platform mode (r=" + r + ")"; return false; }
             detail = "mode " + mode + " (r=" + r + ")";
             return true;
         }
@@ -105,6 +106,7 @@ namespace NvTgpHold
             bool allZero = true; foreach (byte b in curve) if (b != 0) { allZero = false; break; }
             if (allZero) { detail = "fan curve is all zero"; return false; }
             if (!CallBytes(Devs, gpu ? GpuFanCurveId : CpuFanCurveId, curve, out uint r, out detail)) return false;
+            if (r != 1) { detail = "ASUS rejected the " + (gpu ? "GPU" : "CPU") + " fan curve (r=" + r + ")"; return false; }
             detail = (gpu ? "gpuFan" : "cpuFan") + " set (r=" + r + ")";
             return true;
         }
@@ -148,6 +150,7 @@ namespace NvTgpHold
         public static bool SetGpuMux(int value, out string detail)
         {
             if (!Call(Devs, GpuMuxId, (uint)value, out uint r, out detail)) return false;
+            if (r != 1) { detail = "ASUS rejected the GPU MUX request (r=" + r + ")"; return false; }
             detail = "mux=" + value + " (r=" + r + ")"; return true;
         }
 
@@ -155,6 +158,7 @@ namespace NvTgpHold
         public static bool SetGpuEco(int value, out string detail)
         {
             if (!Call(Devs, GpuEcoId, (uint)value, out uint r, out detail)) return false;
+            if (r != 1) { detail = "ASUS rejected the GPU Eco request (r=" + r + ")"; return false; }
             detail = "eco=" + value + " (r=" + r + ")"; return true;
         }
 

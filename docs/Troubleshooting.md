@@ -10,6 +10,8 @@ GPU sleep state or another utility's power policy can change results.
 | Transport/resolver failure | The driver build may be unsupported. Report its exact version and test output. |
 | `ATKACPI open failed` | Check ASUS System Control Interface / ATK ACPI installation. |
 | Dynamic Boost request rejected | The model or firmware may not accept the request. Do not assume a driver PASS validates ATK writes. |
+| ASUS rejected a mode, fan curve, MUX or Eco request | The driver completed the call but firmware did not accept it. Keep the reported reply code when filing a bug; the requested setting has not been confirmed. |
+| GPU OC clear FAIL / video OC clear FAIL | The reset request failed. Do not assume the offset cleared; close GPU applications and reboot to reset clock offsets. |
 | Target exceeds live MAX | Change MAX, apply with the offered GPU restart or reboot, and confirm the new live value before holding. |
 | MAX not ready | Use **Load vBIOS dump…** with a dump from this GPU. See [Usage](Usage.md#read-the-vbios). |
 | `no NVIDIA legacy image` / MAX record not found uniquely | Check that the dump matches the GPU. Report the vBIOS identity and error for unsupported layouts. |

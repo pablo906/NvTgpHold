@@ -39,9 +39,9 @@ namespace NvTgpHold
             {
                 case GpuDisplayMode.Ultimate:
                     // Turn Eco off first (dGPU must be on), then route the MUX to the dGPU.
-                    AtkAcpi.SetGpuEco(0, out _);
+                    if (!AtkAcpi.SetGpuEco(0, out detail)) return false;
                     Thread.Sleep(500);
-                    if (AtkAcpi.ReadGpuEco() == 1) { detail = "could not disable Eco before switching to Ultimate"; return false; }
+                    if (AtkAcpi.ReadGpuEco() != 0) { detail = "could not confirm Eco disabled before switching to Ultimate"; return false; }
                     if (!AtkAcpi.SetGpuMux(0, out detail)) return false;
                     needsReboot = true; detail = "Ultimate set (" + detail + ") - reboot to apply"; return true;
 

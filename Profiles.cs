@@ -7,7 +7,7 @@ namespace NvTgpHold
     // CPU PPT (SPL/SPPT/FPPT via ATK), GPU added power / boost / temp target (ATK), and the CPU + GPU fan curves (ATK).
     // Values are Jose's real GHelper config (%APPDATA%\GHelper\config.json): Silent/Balanced/Turbo are his modes 2/0/1,
     // NvTgpHold-Manual is his custom mode 3 (base Turbo). CpuUv (Curve Optimizer counts) is carried for the experimental
-    // undervolt expansion only; it is not applied yet (no verified SMU/CO primitive in NvTgpHold - see docs).
+    // undervolt expansion only; CPU temperature and CO are applied only when experimental SMU tuning is enabled.
     internal sealed class PowerProfile
     {
         public readonly string Name;

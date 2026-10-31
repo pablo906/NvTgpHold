@@ -51,6 +51,11 @@ CURRENT**, if active, owns the GPU power and boost while the profile owns the re
 Close G-Helper and turn off its **Auto apply** power option first, or the two will
 overwrite each other. The active profile and its CPU limits are restored on launch.
 
+Selecting a standalone CPU preset (including CPU Off) deactivates the full profile,
+so power events and startup cannot silently replace that CPU choice. Other hardware
+settings remain at their last-applied values. Stopping a GPU CURRENT hold returns
+both Dynamic Boost and added GPU power to the active full profile, if one remains.
+
 ### Experimental expansions
 
 These are **off by default and opt-in**, each behind a consent dialog, like the EC
@@ -61,10 +66,9 @@ ladder hold. They are under **Power profile → Experimental expansions**.
   video-clock offset (100-300) immediately; or the "Apply GPU OC from profile" toggle
   applies the active profile's core/memory offsets (NvTgpHold-Manual is +100 core /
   +1000 memory). Offsets reset on reboot and "0" clears them. Nothing is flashed. Too
-  high an offset causes artifacts or a reset. (The **xbar/sys** clock domains and the
-  per-domain **voltage-demand undervolt** that mVolt+ exposes are not implemented here:
-  they use NVIDIA's private interface and mVolt+ is closed-source, so there is no
-  published method to follow.)
+  high an offset causes artifacts or a reset. A driver can reject a requested domain;
+  an error is reported rather than establishing that the offset was applied.
+  Crossbar/system clock offsets and per-domain voltage-demand undervolting are not supported.
 - **CPU undervolt + temperature** (Ryzen SMU, via PawnIO and the signed `RyzenSMU.bin`
   module next to the exe). While on, selecting a profile also sets its CPU temperature
   limit and all-core Curve Optimizer offset through the SMU. Applied on profile select
@@ -72,6 +76,9 @@ ladder hold. They are under **Power profile → Experimental expansions**.
   undervolt. The SMU mailbox is shared with ASUS services, so a write can collide; an
   over-aggressive undervolt destabilises under load. Only Strix Point (Ryzen AI 300) is
   enabled.
+  Disabling tuning clears Curve Optimizer, but does not restore an earlier SMU
+  temperature limit; reboot to reset it. The previous limit cannot be read back by
+  this implementation.
 - **GPU display mode** (ASUS ATK): Eco / Standard / Ultimate / Optimized. Switching into
   or out of Ultimate (MUX) needs a reboot, which NvTgpHold offers after you confirm; Eco
   and Standard re-initialise the display (sign out or reboot for a clean switch).

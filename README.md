@@ -24,14 +24,14 @@ See [Installation](docs/Installation.md) for upgrading and optional startup task
 
 | Feature | Purpose |
 |---|---|
-| Power profiles | Apply a full profile (ASUS mode, CPU PPT, GPU power / boost / temp target, CPU + GPU fan curves) through ASUS ATK, so NvTgpHold can replace G-Helper. Presets mirror the owner's Silent / Balanced / Turbo modes plus a Manual-like one; limits and fans are re-asserted in the background. |
+| Power profiles | Apply ASUS mode, CPU limits, GPU power/boost/temperature target and fan curves together. Select Silent, Balanced, Turbo or NvTgpHold-Manual, with an optional independent fan-curve override. |
 | Hold CURRENT | Set the enforced GPU power limit and re-apply it after detected drops and power events. |
 | Set MAX ceiling | Save a persistent ceiling override; apply it with an offered GPU restart or a reboot. A vBIOS dump is read once to locate the field; nothing is flashed. |
 | NVPCF sync | Match the ASUS platform power setting to the hold target, with readback and prior-value restoration. |
 | Auto re-assert | Optionally resend the GPU hold and CPU profile every 1–30 seconds; default interval is 2 seconds. |
 | CPU power profiles | Apply 18 / 28 / 35 / 45 W sustained CPU profiles on AMD Strix Point, with optional Windows Efficient Enabled boost mode. |
 | Experimental EC CPU ladder hold | On GA403WW BIOS 312 only, periodically reset EC throttle accumulators. Requires PawnIO and explicit opt-in. |
-| Experimental profile expansions | Opt-in, behind consent: GPU core/memory overclock (NvAPI), CPU undervolt + temperature (Ryzen SMU via PawnIO), and GPU display-mode (Eco/Standard/Ultimate) switching with a reboot prompt. |
+| Experimental profile expansions | Opt-in GPU core/memory/video clock offsets, CPU undervolt and temperature control through PawnIO, and Eco/Standard/Ultimate/Optimized GPU display modes. MUX changes require a reboot. |
 
 Menu presets are available targets, **not validated safe power ratings** for your
 laptop. Re-applying limits cannot guarantee that firmware will sustain them.

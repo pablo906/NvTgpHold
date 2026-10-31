@@ -13,8 +13,8 @@ namespace NvTgpHold
     // GPL-3.0, so NO G-Helper code is copied here - only its appearance is matched: a layered, topmost, click-through
     // window drawing two rows (GPU green 0,255,80 / CPU cyan 60,220,255) of temp, power, usage + bar and fan RPM, in
     // Consolas on a black alpha-128 rounded panel, at G-Helper's BaseScale 2.0, anchored top-left with a 10 px margin.
-    // Stage 1: no FPS (ETW), power chart, battery row, or click-cycle modes yet. CPU temp/power need a sensor source
-    // NvTgpHold does not yet read, so they show "--" until a later stage wires the Ryzen SMU PM table.
+    // No FPS (ETW), power chart, battery row, or click-cycle modes yet. CPU temp comes from the ACPI thermal zone and
+    // CPU power from the Windows Energy Meter ("Apu Power"), both unprivileged perf counters - no SMU needed.
     internal static class OverlayOsd
     {
         private const float Scale = 2.0f;                                   // G-Helper BaseScale (the "200% DPI" look)
@@ -26,13 +26,14 @@ namespace NvTgpHold
         private static CancellationTokenSource _cts;
         private static volatile int _gen;                                   // bumped each Show; a worker publishes only while its generation is current
         private static SynchronizationContext _ui;
-        private static PerformanceCounter _cpuLoad;
+        private static PerformanceCounter _cpuLoad, _cpuTempPc, _cpuPowerPc;
+        private static bool _cpuSensorsInit;
         private static readonly object _lock = new object();
 
         private sealed class Snapshot
         {
-            public int GpuTemp = -1, GpuUtil = -1, GpuFan = -1, CpuUtil = -1, CpuFan = -1;
-            public double GpuPower = double.NaN;
+            public int GpuTemp = -1, GpuUtil = -1, GpuFan = -1, CpuUtil = -1, CpuFan = -1, CpuTemp = -1;
+            public double GpuPower = double.NaN, CpuPower = double.NaN;
         }
         private static volatile Snapshot _snap = new Snapshot();
 
@@ -93,9 +94,39 @@ namespace NvTgpHold
             }
             try { _cpuLoad ??= new PerformanceCounter("Processor", "% Processor Time", "_Total"); s.CpuUtil = (int)Math.Round(_cpuLoad.NextValue()); }
             catch { s.CpuUtil = -1; }
+            InitCpuSensors();
+            // CPU temp from the ACPI thermal zone (Kelvin), CPU power from the Energy Meter "Apu Power" (milliwatts).
+            try { if (_cpuTempPc != null) { float k = _cpuTempPc.NextValue(); if (k > 200f) s.CpuTemp = (int)Math.Round(k - 273.15f); } } catch { }
+            try { if (_cpuPowerPc != null) { float mw = _cpuPowerPc.NextValue(); if (mw > 0f) s.CpuPower = mw / 1000.0; } } catch { }
             s.GpuFan = AtkAcpi.ReadFan(true);                    // ATK, not NVIDIA - safe to read during a dGPU restart
             s.CpuFan = AtkAcpi.ReadFan(false);
             return s;
+        }
+
+        // Resolve the CPU thermal-zone and package-power perf counters once. All unprivileged; any missing category or
+        // instance leaves that counter null, so CPU temp/power fall back to "--" without throwing.
+        private static void InitCpuSensors()
+        {
+            if (_cpuSensorsInit) return;
+            _cpuSensorsInit = true;
+            try
+            {
+                var tz = new PerformanceCounterCategory("Thermal Zone Information");
+                string[] zones = tz.GetInstanceNames();
+                string zone = Array.Find(zones, n => n.IndexOf("THRM", StringComparison.OrdinalIgnoreCase) >= 0);
+                if (zone == null && zones.Length > 0) zone = zones[0];
+                if (zone != null) _cpuTempPc = new PerformanceCounter("Thermal Zone Information", "Temperature", zone);
+            }
+            catch { _cpuTempPc = null; }
+            try
+            {
+                var em = new PerformanceCounterCategory("Energy Meter");
+                string[] insts = em.GetInstanceNames();
+                string inst = Array.Find(insts, n => string.Equals(n, "Apu Power", StringComparison.OrdinalIgnoreCase))
+                           ?? Array.Find(insts, n => string.Equals(n, "CPU Power", StringComparison.OrdinalIgnoreCase));
+                if (inst != null) _cpuPowerPc = new PerformanceCounter("Energy Meter", "Power", inst);
+            }
+            catch { _cpuPowerPc = null; }
         }
 
         private static string Temp(int c) => c < 0 ? " --°" : c.ToString(CultureInfo.InvariantCulture) + "°";
@@ -112,7 +143,7 @@ namespace NvTgpHold
             using (var font = new Font("Consolas", fs, FontStyle.Regular, GraphicsUnit.Pixel))
             {
                 string g = "GPU " + Temp(s.GpuTemp) + "  " + Pow(s.GpuPower).PadLeft(6) + "  " + Pct(s.GpuUtil).PadLeft(4) + "  " + Rpm(s.GpuFan) + " RPM";
-                string c = "CPU " + Temp(-1) + "  " + Pow(double.NaN).PadLeft(6) + "  " + Pct(s.CpuUtil).PadLeft(4) + "  " + Rpm(s.CpuFan) + " RPM";
+                string c = "CPU " + Temp(s.CpuTemp) + "  " + Pow(s.CpuPower).PadLeft(6) + "  " + Pct(s.CpuUtil).PadLeft(4) + "  " + Rpm(s.CpuFan) + " RPM";
                 Size gm, cm;
                 using (var measure = new Bitmap(1, 1)) using (var mg = Graphics.FromImage(measure))
                 { gm = Size.Ceiling(mg.MeasureString(g, font)); cm = Size.Ceiling(mg.MeasureString(c, font)); }

@@ -85,20 +85,22 @@ namespace NvTgpHold
         {
             var s = new Snapshot();
             // Keep the overlay off NVIDIA while the dGPU is disabled/restarting, matching the lifecycle contract the
-            // hold/profile/timer/power-event paths use (GpuGuard.Restarting). The trailing re-check drops a sample whose
-            // query straddled the start of a restart; GPU fields stay at their unavailable placeholders meanwhile.
-            if (!GpuGuard.Restarting
-                && Smi.Run("--query-gpu=temperature.gpu,power.draw,utilization.gpu --format=csv,noheader,nounits", 4000, out string o)
-                && !GpuGuard.Restarting)
+            // hold/profile/timer/power-event paths use. RunGpuQuery holds the restart gate across the query, so a restart
+            // either blocks this query (GPU fields stay at their unavailable placeholders) or waits for it to finish
+            // before disabling the device - no NVIDIA query is left in flight across the restart.
+            GpuGuard.RunGpuQuery(() =>
             {
-                var p = o.Split('\n')[0].Split(',');
-                if (p.Length >= 3)
+                if (Smi.Run("--query-gpu=temperature.gpu,power.draw,utilization.gpu --format=csv,noheader,nounits", 4000, out string o))
                 {
-                    if (int.TryParse(p[0].Trim(), out int t)) s.GpuTemp = t;
-                    if (double.TryParse(p[1].Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out double w)) s.GpuPower = w;
-                    if (int.TryParse(p[2].Trim(), out int u)) s.GpuUtil = u;
+                    var p = o.Split('\n')[0].Split(',');
+                    if (p.Length >= 3)
+                    {
+                        if (int.TryParse(p[0].Trim(), out int t)) s.GpuTemp = t;
+                        if (double.TryParse(p[1].Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out double w)) s.GpuPower = w;
+                        if (int.TryParse(p[2].Trim(), out int u)) s.GpuUtil = u;
+                    }
                 }
-            }
+            });
             try { _cpuLoad ??= new PerformanceCounter("Processor", "% Processor Time", "_Total"); s.CpuUtil = (int)Math.Round(_cpuLoad.NextValue()); }
             catch { s.CpuUtil = -1; }
             InitCpuSensors();

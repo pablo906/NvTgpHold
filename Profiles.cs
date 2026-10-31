@@ -53,8 +53,8 @@ namespace NvTgpHold
             new PowerProfile("Silent",            2, 28, 45, 65,   0,   5,  85,  96, -25,   0,    0, "1E-31-3B-42-47-50-5A-64-00-00-03-0C-14-1C-22-29", "1E-31-3B-42-47-50-5A-64-00-00-04-11-1B-23-28-2D"),
             new PowerProfile("Balanced",          0, 35, 50, 65,  15,  25,  85,  95, -20,   0,    0, "1E-28-32-3C-46-50-5A-64-00-09-14-1E-28-33-64-64", "1E-28-33-3C-46-50-5A-64-00-09-13-1D-27-32-64-64"),
             new PowerProfile("Turbo",             1, 35, 45, 55,  70,  25,  87,  96, -25,   0,    0, "1E-28-32-3C-46-50-5A-64-11-1E-28-34-46-64-64-64", "1E-28-32-3C-46-50-5A-64-16-1F-28-32-46-64-64-64"),
-            // NvTgpHold-Manual = Jose's spec: max-cooling fan curve, GPU temp 85, CPU 90, -25 CO; aggressive power from his Manual.
-            new PowerProfile("NvTgpHold-Manual",  1, 35, 50, 65,  70,  25,  85,  90, -25, 100, 1000, FanProfiles.MaxCooling, FanProfiles.MaxCooling),
+            // NvTgpHold-Manual = Jose's spec: CPU 18/28/45 W, max-cooling fan curve, GPU temp 85, CPU 90, -25 CO.
+            new PowerProfile("NvTgpHold-Manual",  1, 18, 28, 45,  70,  25,  85,  90, -25, 100, 1000, FanProfiles.MaxCooling, FanProfiles.MaxCooling),
         };
 
         public static PowerProfile Find(string name)

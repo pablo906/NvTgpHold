@@ -70,7 +70,15 @@ ladder hold. They are under **Power profile → Experimental expansions**.
   an error is reported rather than establishing that the offset was applied.
   Changing core or memory retains the other domain's last accepted offset, including
   an offset applied by a profile. Rejected changes leave the previous menu values in place.
-  Crossbar/system clock offsets and per-domain voltage-demand undervolting are not supported.
+  **SYS / XBAR offset (linked)** applies one shared 0 / +100 / +200 / +300 MHz offset
+  to SYS and XBAR, separately from core, memory and video. It uses a private interface,
+  currently restricted to RTX 5080 Laptop on NVIDIA driver 621.01. Both offsets must
+  read back as requested before the menu shows success. Voltage offsets are preserved.
+  This control is session-only and is not reapplied by power profiles. Its separate
+  experimental consent describes the validation limits. **0 (off)** or **Restore defaults**
+  requests zero for both domains; reboot if resetting fails. Per-domain voltage-demand
+  undervolting is not supported.
+  See the [SYS/XBAR reference](SYS-XBAR.md) for interface details and validation limits.
 - **CPU undervolt + temperature** (Ryzen SMU, via PawnIO and the signed `RyzenSMU.bin`
   module next to the exe). While on, selecting a profile also sets its CPU temperature
   limit and all-core Curve Optimizer offset through the SMU. Applied on profile select

@@ -11,6 +11,7 @@
     <Compile Include="../../AutoAssert.cs" Link="AutoAssert.cs" />
     <Compile Include="../../EcLadderTarget.cs" Link="EcLadderTarget.cs" />
     <Compile Include="../../Profiles.cs" Link="Profiles.cs" />
+    <Compile Include="../../ClockDomainLayout.cs" Link="ClockDomainLayout.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

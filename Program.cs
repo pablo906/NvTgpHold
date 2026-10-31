@@ -51,9 +51,10 @@ namespace NvTgpHold
         private static Settings _settings = new Settings();
         private static CpuProfile _cpu;                     // active CPU profile, null = not asserting CPU limits
         private static PowerProfile _profile;               // active full power profile (replaces G-Helper), null = off
-        private static ToolStripMenuItem _profileMenu, _ocMenu, _smuTuningMenu, _fanMenu, _gpuCoreMenu, _gpuMemMenu, _gpuVideoMenu;
+        private static ToolStripMenuItem _profileMenu, _ocMenu, _smuTuningMenu, _fanMenu, _gpuCoreMenu, _gpuMemMenu, _gpuVideoMenu, _gpuSysXbarMenu;
         private static FanProfile _fanProfile;              // active standalone fan override, null = follow the power profile
         private static int _gpuCore, _gpuMem, _gpuVideo;    // manually-picked GPU OC offsets (MHz)
+        private static int? _gpuSysXbar;                   // unknown until both private-domain offsets are confirmed
         private static string _profileNote = "";
         private static string _cpuNote = "", _autoNote = "", _ghelper = "";
         private static int _autoTicks = 0;
@@ -138,7 +139,7 @@ namespace NvTgpHold
             _profileMenu.DropDownItems.Add(smu); _smuTuningMenu = smu;
 
             // GPU core/mem overclock picker (experimental): core in 25 MHz steps 100-300, memory in Jose's steps. NvAPI.
-            var ocPick = new ToolStripMenuItem("GPU overclock (core / memory)") { ToolTipText = OcPickTip };
+            var ocPick = new ToolStripMenuItem("GPU overclock") { ToolTipText = OcPickTip };
             var coreMenu = new ToolStripMenuItem("Core offset");
             coreMenu.DropDownItems.Add(new ToolStripMenuItem("0 (off)", null, (s, e) => SetGpuCore(0)) { Tag = 0 });
             for (int mhz = 100; mhz <= 300; mhz += 25) { int mm = mhz; coreMenu.DropDownItems.Add(new ToolStripMenuItem("+" + mhz + " MHz", null, (s, e) => SetGpuCore(mm)) { Tag = mhz }); }
@@ -153,6 +154,9 @@ namespace NvTgpHold
             videoMenu.DropDownItems.Add(new ToolStripMenuItem("0 (off)", null, (s, e) => SetGpuVideo(0)) { Tag = 0 });
             foreach (int mhz in new[] { 100, 200, 300 }) { int mm = mhz; videoMenu.DropDownItems.Add(new ToolStripMenuItem("+" + mhz + " MHz", null, (s, e) => SetGpuVideo(mm)) { Tag = mhz }); }
             ocPick.DropDownItems.Add(videoMenu); _gpuVideoMenu = videoMenu;
+            var sysXbarMenu = new ToolStripMenuItem("SYS / XBAR offset (linked)") { ToolTipText = "Experimental" };
+            foreach (int mhz in new[] { 0, 100, 200, 300 }) { int mm = mhz; sysXbarMenu.DropDownItems.Add(new ToolStripMenuItem(mhz == 0 ? "0 (off)" : "+" + mhz + " MHz", null, (s, e) => SetGpuSysXbar(mm)) { Tag = mhz }); }
+            ocPick.DropDownItems.Add(sysXbarMenu); _gpuSysXbarMenu = sysXbarMenu;
             _profileMenu.DropDownItems.Add(ocPick);
 
             var gm = new ToolStripMenuItem("GPU display mode") { ToolTipText = GpuModeTip };
@@ -478,12 +482,15 @@ namespace NvTgpHold
             bool ocCleared = ApplyGpuClocks(0, 0, out string ocReset);
             bool videoCleared = true; string videoReset = "";
             if (_gpuVideo != 0) { videoCleared = NvOc.SetVideoClock(0, out videoReset); if (videoCleared) _gpuVideo = 0; }
+            bool sysXbarCleared = true; string sysXbarReset = "";
+            if (NvSysXbar.NeedsReset) { sysXbarCleared = NvSysXbar.SetLinkedOffset(0, out sysXbarReset); _gpuSysXbar = sysXbarCleared ? 0 : (int?)null; }
             _fanProfile = null; _settings.FanProfile = ""; _settings.GpuOptimized = false;
             SettingsStore.Save(_settings); BoostMode.RestorePrior(); _cpuNote = "";
             _sync = "";
             _last = "restored to stock 95+25 (" + gpu + ")";
             if (!ocCleared) _last += " | GPU OC clear FAIL: " + ocReset;
             if (!videoCleared) _last += " | video OC clear FAIL: " + videoReset;
+            if (!sysXbarCleared) _last += " | SYS/XBAR clear FAIL: " + sysXbarReset;
             Balloon("MAX: " + rm + "\nCURRENT->95: " + rc + "\nBoost->25 (on): " + rb + "\nNVPCF additional->0: " + rp);
             Refresh();
         }
@@ -529,7 +536,8 @@ namespace NvTgpHold
         private const string OcPickTip =
             "Experimental GPU overclock through NvAPI public clock domains. Pick a core (25 MHz steps), memory, or video\n" +
             "offset; they apply immediately and reset on reboot. An unstable offset causes artifacts or a driver reset.\n" +
-            "Not persisted across restarts. (xbar/sys domains and per-domain voltage undervolt are not available here.)";
+            "SYS/XBAR share one separate offset through an experimental private interface.\n" +
+            "Not persisted across restarts. Per-domain voltage undervolt is not available here.";
 
         // Standalone fan-curve override. null = follow the active power profile's fans.
         private static void SetFanProfile(FanProfile f)
@@ -565,6 +573,25 @@ namespace NvTgpHold
         private static void ApplyManualOc(int core, int mem) { bool ok = ApplyGpuClocks(core, mem, out string d); _last = "GPU OC " + (ok ? d : "FAIL: " + d); Refresh(); }
         // Video clock is a separate SetPstates20 call (public VIDEO domain) so it can't break the core/mem path.
         private static void SetGpuVideo(int mhz) { if (mhz > 0 && !ConsentOc()) return; bool ok = NvOc.SetVideoClock(mhz, out string d); if (ok) _gpuVideo = mhz; _last = "GPU video OC " + (ok ? d : "FAIL: " + d); Refresh(); }
+
+        private static bool _sysXbarConsented;
+        private static void SetGpuSysXbar(int mhz)
+        {
+            if (mhz > 0 && !_sysXbarConsented)
+            {
+                if (MessageBox.Show("Experimental SYS/XBAR overclock through a private NVIDIA interface.\n\n" +
+                    "Both offsets will use the same value, independent of core/memory/video. Voltage offsets are preserved.\n" +
+                    "The layout was read on RTX 5080 Laptop / driver 621.01; writes have not been validated under load.\n" +
+                    "An unstable offset can crash the driver or system. Off / Restore defaults requests zero; reboot if a reset fails.",
+                    "NvTgpHold", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
+                _sysXbarConsented = true;
+            }
+            bool ok = NvSysXbar.SetLinkedOffset(mhz, out string detail);
+            // An ambiguous/partial request is not a selected equal pair. Keep reset eligibility in NvSysXbar.
+            _gpuSysXbar = ok ? mhz : (int?)null;
+            _last = "SYS/XBAR " + (ok ? detail : "FAIL: " + detail);
+            Refresh();
+        }
 
         // GPU "Optimized" policy: dGPU on (Standard) while on AC, Eco (iGPU only) on battery.
         private static void ApplyOptimizedEco(string why)
@@ -819,6 +846,7 @@ namespace NvTgpHold
             if (_gpuCoreMenu != null) foreach (ToolStripMenuItem it in _gpuCoreMenu.DropDownItems) it.Checked = it.Tag is int c && c == _gpuCore;
             if (_gpuMemMenu != null) foreach (ToolStripMenuItem it in _gpuMemMenu.DropDownItems) it.Checked = it.Tag is int me && me == _gpuMem;
             if (_gpuVideoMenu != null) foreach (ToolStripMenuItem it in _gpuVideoMenu.DropDownItems) it.Checked = it.Tag is int vi && vi == _gpuVideo;
+            if (_gpuSysXbarMenu != null) foreach (ToolStripMenuItem it in _gpuSysXbarMenu.DropDownItems) it.Checked = it.Tag is int sx && _gpuSysXbar.HasValue && sx == _gpuSysXbar.Value;
             if (_intervalMenu != null) foreach (ToolStripMenuItem it in _intervalMenu.DropDownItems) it.Checked = (int)it.Tag == _settings.IntervalS;
             if (_cpuMenu != null) foreach (ToolStripItem it in _cpuMenu.DropDownItems) if (it is ToolStripMenuItem mi && !mi.CheckOnClick) mi.Checked = (mi.Tag as string) == (_cpu?.Name) || (mi.Tag == null && _cpu == null);
             if (_holdMenu != null) foreach (ToolStripMenuItem it in _holdMenu.DropDownItems) it.Checked = (_holdTargetW > 0 && it.Text == _holdTargetW + " W");

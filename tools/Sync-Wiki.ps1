@@ -37,6 +37,7 @@ $sidebar = @'
 - [Troubleshooting](Troubleshooting)
 - [Building from source](Building-from-Source)
 - [EC CPU ladder reference](EC-Ladder)
+- [Linked SYS/XBAR reference](SYS-XBAR)
 '@
 [IO.File]::WriteAllText((Join-Path $wikiRoot '_Sidebar.md'), $sidebar + "`n", $encoding)
 Write-Output "Generated $($pages.Count) wiki pages and navigation."

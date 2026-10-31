@@ -21,6 +21,7 @@ validated, and the available wattage presets do not establish safe limits.
 | [Safety](Safety.md) | Risks, monitoring, reverting and uninstalling |
 | [Building from source](Building-from-Source.md) | Build, tests, packaging and wiki publication |
 | [EC CPU ladder](EC-Ladder.md) | Firmware reference, transport limitations and evidence boundaries |
+| [Linked SYS/XBAR](SYS-XBAR.md) | Private clock interface, driver restrictions and readback behavior |
 
 ## Compatibility and validation
 

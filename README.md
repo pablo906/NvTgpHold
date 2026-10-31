@@ -62,7 +62,9 @@ and research notes belong in the technical reference, rather than the setup guid
 
 ## Revert or uninstall
 
-Choose **Restore defaults**. If a MAX override is removed, accept the GPU restart
+Choose **Reset to defaults (Balanced + Optimized)** to select Balanced power and
+fan curves, Optimized GPU mode, and disable holds and experimental tuning while
+requesting zero clock offsets. Check for reported reset failures. If a MAX override is removed, accept the GPU restart
 after closing GPU applications, or reboot. Exit the utility and remove any startup
 task before deleting its folder. Another tool's recognized MAX override is left
 untouched. CPU PPT values cannot be read back or restored to their prior values;

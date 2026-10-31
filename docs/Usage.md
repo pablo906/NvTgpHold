@@ -129,7 +129,7 @@ CURRENT and checks for a drop every 3 seconds. It also re-applies the target eve
 **Sync NVPCF TGP to hold** is on by default. It writes the variable ASUS GPU power
 setting so that `fixed base + variable = target`, then verifies readback. It saves
 the variable setting before its first write and restores it on stop, uncheck or
-exit. Restore defaults requests 0 W instead. Unsupported or out-of-range values
+exit. Reset to defaults instead selects Balanced's GPU power settings. Unsupported or out-of-range values
 are skipped and reported in status.
 
 **Keep Dynamic Boost on (+25 W)** is off by default. When enabled, NVPCF sync uses
@@ -229,7 +229,7 @@ finish before the worker observes cancellation. See the [technical reference](EC
 | Action | Effect |
 |---|---|
 | Stop holding | Stops the GPU CURRENT hold and restores the captured NVPCF variable value. Leaves CPU/EC selections and MAX override in place. |
-| Restore defaults | Stops GPU and EC holds, clears the CPU selection, restores Windows boost settings, removes this tool's MAX override, and requests stock GPU settings (95 W CURRENT, 0 W variable, 25 W Dynamic Boost). Offers a GPU restart if it removed an override. |
+| Reset to defaults (Balanced + Optimized) | Stops GPU/EC holds and Auto re-assert, selects Balanced with its CPU limits and fan curves, clears fan overrides, disables experimental tuning, requests zero core/memory/video/SYS/XBAR offsets and CPU undervolt, and selects Optimized GPU mode. Removes this tool's MAX override and restores captured Windows boost settings. Offers a GPU restart for MAX removal and a reboot when leaving Ultimate. Failed resets remain visible. |
 | Exit | Stops workers and restores captured NVPCF/Windows boost values. Leaves the MAX override and saved selections intact. |
 
 CPU PPT limits cannot be restored to their previous values. A successful GPU

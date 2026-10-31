@@ -32,12 +32,16 @@ limitations; see [EC CPU ladder](EC-Ladder.md).
 
 ## Reverting changes
 
-1. Choose **Restore defaults**. This stops both holds, clears the CPU selection,
-   restores captured Windows boost settings and requests stock GPU settings.
+1. Choose **Reset to defaults (Balanced + Optimized)**. This stops both holds and
+   Auto re-assert, selects Balanced power with its default fan curves and Optimized
+   GPU mode, clears fan overrides, and requests zero GPU offsets and CPU undervolt.
+   It disables experimental tuning and restores captured Windows boost settings.
+   Check the status for failed writes; a requested reset is not proof of success.
 2. If a MAX override was removed, accept the GPU restart after closing applications,
    or reboot. Another tool's recognized override is left alone; remove it in that tool.
-3. Restore CPU PPT limits with an ASUS/G-Helper profile change or reboot. The tool
-   cannot capture and restore the previous PPT values through ATK readback.
+3. Balanced applies its own CPU limits and, when SMU access is available, its CPU
+   temperature target. To restore the firmware's unmodified limits instead, use
+   an ASUS/G-Helper profile change or reboot. Previous PPT values cannot be read back.
 4. Exit NvTgpHold. Disable any scheduled startup task before further troubleshooting.
 
 Simply exiting does not remove MAX or clear saved selections. Disabling the EC

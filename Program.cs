@@ -798,12 +798,19 @@ namespace NvTgpHold
                 // which re-enables Dynamic Boost and resets NVPCF to the mode default - and boost-ON re-advertises over
                 // a held CURRENT. So re-assert the hold here (boost off, NVPCF sync, E633) instead of leaving the GPU at
                 // the mode default and relying on the 3 s poll; otherwise applying a profile silently drops the hold.
-                AtkAcpi.SetBoost(HoldBoost, out string hb);
-                if (_syncTgp) SyncTgp("profile " + p.Name);
+                // All three are best-effort: run them unconditionally and aggregate every result. E633 confirming its
+                // own request does not prove the boost-off or the NVPCF sync that must precede it actually took, so a
+                // rejected SetBoost or failed SyncTgp must still fail the apply and surface its detail in the note.
+                bool boostOk = AtkAcpi.SetBoost(HoldBoost, out string hb);
+                bool syncOk = true; string syncNote = "";
+                if (_syncTgp) { syncOk = SyncTgp("profile " + p.Name); syncNote = _sync; }
                 System.Threading.Thread.Sleep(250);          // let the boost toggle settle before E633 (as DoHold/Reassert do)
                 bool held = ApplyCurrent(_holdTargetW, out string hc);
-                success &= held; _lastReassert = DateTime.UtcNow;
-                notes.Append(held ? ", hold re-asserted " + _holdTargetW + " W over profile" : ", hold re-assert FAIL: " + hc).Append(" (boost " + hb + ")");
+                bool reassert = boostOk & syncOk & held;     // &, not &&: all three already ran above; none short-circuits
+                success &= reassert; _lastReassert = DateTime.UtcNow;
+                notes.Append(held ? ", hold re-asserted " + _holdTargetW + " W over profile" : ", hold re-assert FAIL: " + hc);
+                notes.Append(boostOk ? " (boost " + hb + ")" : " (boost FAIL: " + hb + ")");
+                if (_syncTgp && !syncOk) notes.Append(" (sync FAIL: " + syncNote + ")");
             }
             // Experimental, opt-in, full apply only (never the fast re-assert): GPU clock offset (NVAPI) and CPU temp +
             // undervolt (Ryzen SMU). Each is skipped unless its toggle is on; a failure is reported, not fatal.

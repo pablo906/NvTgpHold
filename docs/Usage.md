@@ -33,7 +33,7 @@ Values come from the owner's own G-Helper config.
 | Silent | Silent | 28 / 45 / 65 W | +0 W / 5 W / 85 °C |
 | Balanced | Balanced | 35 / 50 / 65 W | +15 W / 25 W / 85 °C |
 | Turbo | Turbo | 35 / 45 / 55 W | +70 W / 25 W / 87 °C |
-| NvTgpHold-Manual | Turbo base | 35 / 50 / 65 W | +70 W / 25 W / 85 °C |
+| NvTgpHold-Manual | Turbo base | 18 / 28 / 45 W | +70 W / 25 W / 85 °C |
 
 NvTgpHold-Manual uses a max-cooling fan curve (linear to 50 °C / 50%, then up to
 100% at 70 °C, flat above), CPU limit 90 °C, GPU target 85 °C, and -25 CO undervolt

@@ -12,6 +12,8 @@ GPU sleep state or another utility's power policy can change results.
 | Dynamic Boost request rejected | The model or firmware may not accept the request. Do not assume a driver PASS validates ATK writes. |
 | ASUS rejected a mode, fan curve, MUX or Eco request | The driver completed the call but firmware did not accept it. Keep the reported reply code when filing a bug; the requested setting has not been confirmed. |
 | GPU OC clear FAIL / video OC clear FAIL | The reset request failed. Do not assume the offset cleared; close GPU applications and reboot to reset clock offsets. |
+| SYS/XBAR unavailable or layout rejected | The private interface is restricted to RTX 5080 Laptop / driver 621.01 and a recognized layout. Other combinations are rejected before writes. |
+| SYS/XBAR offsets not confirmed / clear FAIL | Readback did not confirm the requested equal pair. Do not assume either offset applied or cleared. Request 0 again, or reboot to reset. |
 | Target exceeds live MAX | Change MAX, apply with the offered GPU restart or reboot, and confirm the new live value before holding. |
 | MAX not ready | Use **Load vBIOS dump…** with a dump from this GPU. See [Usage](Usage.md#read-the-vbios). |
 | `no NVIDIA legacy image` / MAX record not found uniquely | Check that the dump matches the GPU. Report the vBIOS identity and error for unsupported layouts. |

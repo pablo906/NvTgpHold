@@ -70,6 +70,9 @@ ladder hold. They are under **Power profile → Experimental expansions**.
   an error is reported rather than establishing that the offset was applied.
   Changing core or memory retains the other domain's last accepted offset, including
   an offset applied by a profile. Rejected changes leave the previous menu values in place.
+  With profile OC enabled, a full profile apply also clears video and SYS/XBAR
+  picker offsets. Unknown values after relaunch are reset too; failures are reported
+  as an incomplete profile apply. With profile OC off, these picker offsets are left alone.
   **SYS / XBAR offset (linked)** applies one shared 0 / +100 / +200 / +300 MHz offset
   to SYS and XBAR, separately from core, memory and video. It uses a private interface,
   currently restricted to RTX 5080 Laptop on NVIDIA driver 621.01. Both offsets must

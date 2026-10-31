@@ -149,8 +149,8 @@ namespace NvTgpHold
         private const uint GetP20 = 0x6FF81213u, SetP20 = 0x0F4DAE6Bu;
         private const int StructSize = 7316;                 // sizeof NV_GPU_PERF_PSTATES20_INFO_V1 (16 pstates x 8 clocks x 4 base voltages)
         private const uint Ver1 = StructSize | (1u << 16);   // 0x00011C94
-        public const int MaxCore = 300, MinCore = -300, MaxMem = 2000, MinMem = -2000;   // offsets in MHz
-        private const int Graphics = 0, Memory = 4;
+        public const int MaxCore = 300, MinCore = -300, MaxMem = 2000, MinMem = -2000, MaxVideo = 300, MinVideo = -300;   // offsets in MHz
+        private const int Graphics = 0, Memory = 4, Video = 8;   // NV_GPU_PUBLIC_CLOCK_ID
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int P20Delegate(IntPtr gpu, IntPtr info);
 
@@ -212,6 +212,41 @@ namespace NvTgpHold
                         int rc = set(nv.Gpu, info);
                         if (rc != 0) { detail = "SetPstates20 rc=" + rc; return false; }
                         detail = "core +" + core + " / mem +" + mem + " MHz";
+                        return true;
+                    }
+                    finally { Marshal.FreeHGlobal(info); }
+                }
+            }
+            catch (Exception ex) { detail = "exception: " + ex.Message; return false; }
+        }
+
+        // Sets the P0 video-clock offset (MHz) on the public VIDEO domain. Separate from SetClocks so that a GPU which
+        // doesn't accept a video-domain entry fails only this call, not the proven core/memory path. 0 clears it.
+        public static bool SetVideoClock(int mhz, out string detail)
+        {
+            detail = "";
+            if (mhz < MinVideo || mhz > MaxVideo) { detail = "video offset " + mhz + " outside " + MinVideo + ".." + MaxVideo; return false; }
+            if (GpuGuard.Restarting) { detail = "GPU restarting"; return false; }
+            try
+            {
+                using (var nv = new NvApiSession())
+                {
+                    if (!nv.Open(out detail)) return false;
+                    IntPtr p = nv.QI(SetP20);
+                    if (p == IntPtr.Zero) { detail = "SetPstates20 interface missing"; return false; }
+                    var set = (P20Delegate)Marshal.GetDelegateForFunctionPointer(p, typeof(P20Delegate));
+                    IntPtr info = Marshal.AllocHGlobal(StructSize);
+                    try
+                    {
+                        Marshal.Copy(new byte[StructSize], 0, info, StructSize);
+                        Marshal.WriteInt32(info, 0, (int)Ver1);
+                        Marshal.WriteInt32(info, 8, 1);    // numPstates = 1 (P0)
+                        Marshal.WriteInt32(info, 12, 1);   // numClocks  = 1 (video)
+                        Marshal.WriteInt32(info, 16, 0);
+                        WriteClock(info, 28, Video, mhz * 1000);
+                        int rc = set(nv.Gpu, info);
+                        if (rc != 0) { detail = "SetPstates20 (video) rc=" + rc; return false; }
+                        detail = "video +" + mhz + " MHz";
                         return true;
                     }
                     finally { Marshal.FreeHGlobal(info); }

@@ -64,8 +64,13 @@ namespace NvTgpHold
                     {
                         var snap = Gather();                     // collect into a local; the bounded SMI query can outlive a Hide
                         if (token.IsCancellationRequested || gen != _gen) break;   // superseded by Hide/Show - don't publish a stale frame
-                        _snap = snap;
-                        _ui?.Post(_ => { if (gen == _gen && _win != null) { try { Render(); } catch { } } }, null);
+                        // Publish on the UI thread with the generation check: Show/Hide cannot replace the
+                        // generation between that check and publication, or an old frame overwrite a new one.
+                        _ui?.Post(_ =>
+                        {
+                            if (!token.IsCancellationRequested && gen == _gen && _win != null)
+                            { _snap = snap; try { Render(); } catch { } }
+                        }, null);
                     }
                     catch { }
                     token.WaitHandle.WaitOne(1000);

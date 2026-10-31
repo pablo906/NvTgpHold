@@ -24,6 +24,7 @@ namespace NvTgpHold
 
         private static OsdWindow _win;
         private static CancellationTokenSource _cts;
+        private static volatile int _gen;                                   // bumped each Show; a worker publishes only while its generation is current
         private static SynchronizationContext _ui;
         private static PerformanceCounter _cpuLoad;
         private static readonly object _lock = new object();
@@ -47,11 +48,19 @@ namespace NvTgpHold
             _win.Show();
             _cts = new CancellationTokenSource();
             var token = _cts.Token;
+            int gen = ++_gen;                                    // this worker's generation; a later Show supersedes it
             System.Threading.Tasks.Task.Run(() =>
             {
                 while (!token.IsCancellationRequested)
                 {
-                    try { Gather(); _ui?.Post(_ => { try { Render(); } catch { } }, null); } catch { }
+                    try
+                    {
+                        var snap = Gather();                     // collect into a local; the bounded SMI query can outlive a Hide
+                        if (token.IsCancellationRequested || gen != _gen) break;   // superseded by Hide/Show - don't publish a stale frame
+                        _snap = snap;
+                        _ui?.Post(_ => { if (gen == _gen && _win != null) { try { Render(); } catch { } } }, null);
+                    }
+                    catch { }
                     token.WaitHandle.WaitOne(1000);
                 }
             });
@@ -64,10 +73,15 @@ namespace NvTgpHold
             if (_win != null) { try { _win.Close(); _win.Dispose(); } catch { } _win = null; }
         }
 
-        private static void Gather()
+        private static Snapshot Gather()
         {
             var s = new Snapshot();
-            if (Smi.Run("--query-gpu=temperature.gpu,power.draw,utilization.gpu --format=csv,noheader,nounits", 4000, out string o))
+            // Keep the overlay off NVIDIA while the dGPU is disabled/restarting, matching the lifecycle contract the
+            // hold/profile/timer/power-event paths use (GpuGuard.Restarting). The trailing re-check drops a sample whose
+            // query straddled the start of a restart; GPU fields stay at their unavailable placeholders meanwhile.
+            if (!GpuGuard.Restarting
+                && Smi.Run("--query-gpu=temperature.gpu,power.draw,utilization.gpu --format=csv,noheader,nounits", 4000, out string o)
+                && !GpuGuard.Restarting)
             {
                 var p = o.Split('\n')[0].Split(',');
                 if (p.Length >= 3)
@@ -79,9 +93,9 @@ namespace NvTgpHold
             }
             try { _cpuLoad ??= new PerformanceCounter("Processor", "% Processor Time", "_Total"); s.CpuUtil = (int)Math.Round(_cpuLoad.NextValue()); }
             catch { s.CpuUtil = -1; }
-            s.GpuFan = AtkAcpi.ReadFan(true);
+            s.GpuFan = AtkAcpi.ReadFan(true);                    // ATK, not NVIDIA - safe to read during a dGPU restart
             s.CpuFan = AtkAcpi.ReadFan(false);
-            _snap = s;
+            return s;
         }
 
         private static string Temp(int c) => c < 0 ? " --°" : c.ToString(CultureInfo.InvariantCulture) + "°";

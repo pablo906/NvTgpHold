@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../TgpSync.cs" Link="TgpSync.cs" />
+    <Compile Include="../../AtkAcpi.cs" Link="AtkAcpi.cs" />
     <Compile Include="../../AutoAssert.cs" Link="AutoAssert.cs" />
     <Compile Include="../../EcLadderTarget.cs" Link="EcLadderTarget.cs" />
     <Compile Include="../../Profiles.cs" Link="Profiles.cs" />

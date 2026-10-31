@@ -167,8 +167,15 @@ namespace NvTgpHold
         public static int ReadFan(bool gpu)
         {
             if (!Call(Dsts, gpu ? GpuFanId : CpuFanId, 0u, out uint r, out _)) return -1;
-            int rpm100 = TgpSync.Decode(r);          // validates the 0x0001xxxx DSTS reply; -1 on the unsupported-device sentinel
-            return rpm100 < 0 ? -1 : rpm100 * 100;    // ASUS reports RPM/100 in the low word
+            return DecodeFan(r);
+        }
+
+        // Decodes a DSTS fan reply to RPM: TgpSync.Decode validates the 0x0001xxxx presence flag and returns -1 for an
+        // unsupported reply (e.g. the 0xFFFFFFFE sentinel), so that never scales into a fabricated RPM; the low word is RPM/100.
+        internal static int DecodeFan(uint r)
+        {
+            int rpm100 = TgpSync.Decode(r);
+            return rpm100 < 0 ? -1 : rpm100 * 100;
         }
 
         // Variable component (0x98) in watts, or -1 if it can't be read.

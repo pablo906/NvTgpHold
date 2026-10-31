@@ -20,6 +20,74 @@ double-click it to refresh status. Read [Safety](Safety.md) before changing limi
 The EC hold is optional and independent. Leave it disabled unless you understand
 and accept its [additional risks](#experimental-ec-cpu-ladder-hold).
 
+## Power profiles (replacing G-Helper)
+
+**Power profile** applies a full set of limits in one click, so the tool can stand
+in for G-Helper. Each profile sets, through ASUS ATK (the same calls G-Helper uses,
+not direct EC writes): the ASUS platform mode, CPU PPT (SPL / SPPT / FPPT), GPU
+added power, Dynamic Boost, GPU temperature target, and the CPU and GPU fan curves.
+Values come from the owner's own G-Helper config.
+
+| Profile | ASUS mode | CPU SPL/SPPT/FPPT | GPU added / boost / temp |
+|---|---|---|---|
+| Silent | Silent | 28 / 45 / 65 W | +0 W / 5 W / 85 °C |
+| Balanced | Balanced | 35 / 50 / 65 W | +15 W / 25 W / 85 °C |
+| Turbo | Turbo | 35 / 45 / 55 W | +70 W / 25 W / 87 °C |
+| NvTgpHold-Manual | Turbo base | 35 / 50 / 65 W | +70 W / 25 W / 85 °C |
+
+NvTgpHold-Manual uses a max-cooling fan curve (linear to 50 °C / 50%, then up to
+100% at 70 °C, flat above), CPU limit 90 °C, GPU target 85 °C, and -25 CO undervolt
+(the undervolt applies only with the experimental CPU tuning on). A separate **Fan
+profile** submenu overrides the fan curve independently of the power profile: Silent,
+Balanced, Turbo, or Max cooling (or "Follow power profile" to clear the override).
+
+Apply order mirrors G-Helper: the ASUS mode first (so the EC loads that mode's
+baseline), then the fan curves, then CPU PPT, then GPU temp / boost / power — GPU
+power is written last so an NVPCF recompute from the earlier calls does not leave it
+low. CPU PPT is re-asserted in the background like the holds; GPU added power is put
+back if it drifts; fan curves are re-sent on power and resume events. A GPU **Hold
+CURRENT**, if active, owns the GPU power and boost while the profile owns the rest.
+
+Close G-Helper and turn off its **Auto apply** power option first, or the two will
+overwrite each other. The active profile and its CPU limits are restored on launch.
+
+Selecting a standalone CPU preset (including CPU Off) deactivates the full profile,
+so power events and startup cannot silently replace that CPU choice. Other hardware
+settings remain at their last-applied values. Stopping a GPU CURRENT hold returns
+both Dynamic Boost and added GPU power to the active full profile, if one remains.
+
+### Experimental expansions
+
+These are **off by default and opt-in**, each behind a consent dialog, like the EC
+ladder hold. They are under **Power profile → Experimental expansions**.
+
+- **GPU overclock** (NvAPI public clock domains). The **GPU overclock** picker applies a
+  core offset (25 MHz steps, 100-300), a memory offset (300-2000 in set steps), or a
+  video-clock offset (100-300) immediately; or the "Apply GPU OC from profile" toggle
+  applies the active profile's core/memory offsets (NvTgpHold-Manual is +100 core /
+  +1000 memory). Offsets reset on reboot and "0" clears them. Nothing is flashed. Too
+  high an offset causes artifacts or a reset. A driver can reject a requested domain;
+  an error is reported rather than establishing that the offset was applied.
+  Crossbar/system clock offsets and per-domain voltage-demand undervolting are not supported.
+- **CPU undervolt + temperature** (Ryzen SMU, via PawnIO and the signed `RyzenSMU.bin`
+  module next to the exe). While on, selecting a profile also sets its CPU temperature
+  limit and all-core Curve Optimizer offset through the SMU. Applied on profile select
+  and power/resume only, never in the fast re-assert. Turning it off clears the
+  undervolt. The SMU mailbox is shared with ASUS services, so a write can collide; an
+  over-aggressive undervolt destabilises under load. Only Strix Point (Ryzen AI 300) is
+  enabled.
+  Disabling tuning clears Curve Optimizer, but does not restore an earlier SMU
+  temperature limit; reboot to reset it. The previous limit cannot be read back by
+  this implementation.
+- **GPU display mode** (ASUS ATK): Eco / Standard / Ultimate / Optimized. Switching into
+  or out of Ultimate (MUX) needs a reboot, which NvTgpHold offers after you confirm; Eco
+  and Standard re-initialise the display (sign out or reboot for a clean switch).
+  Optimized keeps the dGPU on while on AC and switches to Eco (iGPU only) on battery,
+  applied automatically on power and resume events.
+
+Do not run the experimental EC CPU ladder hold at the same time as a profile — both can
+touch the EC fan state.
+
 ## GPU limits and status
 
 | Term | Meaning |

@@ -10,6 +10,7 @@
     <Compile Include="../../TgpSync.cs" Link="TgpSync.cs" />
     <Compile Include="../../AutoAssert.cs" Link="AutoAssert.cs" />
     <Compile Include="../../EcLadderTarget.cs" Link="EcLadderTarget.cs" />
+    <Compile Include="../../Profiles.cs" Link="Profiles.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

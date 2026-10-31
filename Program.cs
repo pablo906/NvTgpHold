@@ -50,6 +50,11 @@ namespace NvTgpHold
         private static ToolStripMenuItem _ecMenu;
         private static Settings _settings = new Settings();
         private static CpuProfile _cpu;                     // active CPU profile, null = not asserting CPU limits
+        private static PowerProfile _profile;               // active full power profile (replaces G-Helper), null = off
+        private static ToolStripMenuItem _profileMenu, _ocMenu, _smuTuningMenu, _fanMenu, _gpuCoreMenu, _gpuMemMenu, _gpuVideoMenu;
+        private static FanProfile _fanProfile;              // active standalone fan override, null = follow the power profile
+        private static int _gpuCore, _gpuMem, _gpuVideo;    // manually-picked GPU OC offsets (MHz)
+        private static string _profileNote = "";
         private static string _cpuNote = "", _autoNote = "", _ghelper = "";
         private static int _autoTicks = 0;
         private static DateTime _lastGhCheck = DateTime.MinValue;
@@ -62,6 +67,7 @@ namespace NvTgpHold
             Application.SetCompatibleTextRenderingDefault(false);
             CpuInfo.Detect();
             EcLadder.Detect();
+            RyzenSmu.Detect();
             _settings = SettingsStore.Load();
             _tray = new NotifyIcon { Icon = AppIcon.Load(), Visible = true, Text = "NvTgpHold" };
             _tray.ContextMenuStrip = BuildMenu();
@@ -76,11 +82,16 @@ namespace NvTgpHold
             if (_settings.Auto) _autoTimer.Start();
             _ui = System.Threading.SynchronizationContext.Current;
             if (_settings.EcLadder && EcLadder.Supported) StartEcHold();
-            SystemEvents.PowerModeChanged += (s, e) => { if (_holdTargetW > 0) Reassert("power " + e.Mode); ApplyCpu("power " + e.Mode); };
-            SystemEvents.SessionSwitch += (s, e) => { if (e.Reason != SessionSwitchReason.SessionUnlock) return; if (_holdTargetW > 0) Reassert("resume"); ApplyCpu("resume"); };
-            if (CpuInfo.StrixPoint && CpuProfiles.Find(_settings.CpuProfile) != null) SetCpuProfile(CpuProfiles.Find(_settings.CpuProfile));
+            SystemEvents.PowerModeChanged += (s, e) => { if (_holdTargetW > 0) Reassert("power " + e.Mode); if (_profile != null) ApplyProfile(_profile, "power " + e.Mode, full: true); else { ApplyCpu("power " + e.Mode); ReapplyFanProfile(); } ApplyOptimizedEco("power " + e.Mode); };
+            SystemEvents.SessionSwitch += (s, e) => { if (e.Reason != SessionSwitchReason.SessionUnlock) return; if (_holdTargetW > 0) Reassert("resume"); if (_profile != null) ApplyProfile(_profile, "resume", full: true); else { ApplyCpu("resume"); ReapplyFanProfile(); } ApplyOptimizedEco("resume"); };
+            _fanProfile = FanProfiles.Find(_settings.FanProfile);
+            var savedProfile = PowerProfiles.Find(_settings.Profile);
+            if (savedProfile != null) { _profile = savedProfile; ApplyProfile(savedProfile, "startup", full: true); }
+            else if (CpuInfo.StrixPoint && CpuProfiles.Find(_settings.CpuProfile) != null) SetCpuProfile(CpuProfiles.Find(_settings.CpuProfile));
+            if (_profile == null && _fanProfile != null) ReapplyFanProfile();   // fan override with no power profile active
+            ApplyOptimizedEco("startup");
             Refresh();
-            Application.ApplicationExit += (s, e) => { RestorePrior("exit"); BoostMode.RestorePrior(); StopEcHold(exiting: true); if (_tray != null) _tray.Visible = false; };
+            Application.ApplicationExit += (s, e) => { RestorePrior("exit"); BoostMode.RestorePrior(); StopEcHold(exiting: true); RyzenSmu.Close(); if (_tray != null) _tray.Visible = false; };
             Application.Run();
         }
 
@@ -89,6 +100,75 @@ namespace NvTgpHold
             var m = new ContextMenuStrip { ShowItemToolTips = true };
             _status = new ToolStripMenuItem("(status)") { Enabled = false };
             m.Items.Add(_status);
+            m.Items.Add(new ToolStripSeparator());
+            _profileMenu = new ToolStripMenuItem("Power profile (replaces G-Helper)") { ToolTipText = ProfileTip };
+            _profileMenu.DropDownItems.Add(new ToolStripMenuItem("Off (stop managing)", null, (s, e) => SetProfile(null)) { Tag = "" });
+            foreach (var p in PowerProfiles.Presets) { var pp = p; _profileMenu.DropDownItems.Add(new ToolStripMenuItem(p.Name, null, (s, e) => SetProfile(pp)) { Tag = p.Name, ToolTipText = p.Summary }); }
+
+            // Standalone fan-curve override, separate from the power profile (Silent/Balanced/Turbo + Max cooling).
+            _fanMenu = new ToolStripMenuItem("Fan profile") { ToolTipText = FanTip };
+            _fanMenu.DropDownItems.Add(new ToolStripMenuItem("Follow power profile", null, (s, e) => SetFanProfile(null)) { Tag = "" });
+            foreach (var f in FanProfiles.Presets) { var ff = f; _fanMenu.DropDownItems.Add(new ToolStripMenuItem(f.Name, null, (s, e) => SetFanProfile(ff)) { Tag = f.Name }); }
+            _profileMenu.DropDownItems.Add(_fanMenu);
+
+            _profileMenu.DropDownItems.Add(new ToolStripSeparator());
+            _profileMenu.DropDownItems.Add(new ToolStripMenuItem("Experimental expansions") { Enabled = false });
+
+            var oc = new ToolStripMenuItem("Apply GPU core/mem OC from profile") { Checked = _settings.GpuOc, CheckOnClick = true, ToolTipText = OcTip };
+            oc.CheckedChanged += (s, e) =>
+            {
+                if (oc.Checked && !_settings.GpuOc && MessageBox.Show(OcRisk, "NvTgpHold", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) { oc.Checked = false; return; }
+                _settings.GpuOc = oc.Checked; SettingsStore.Save(_settings);
+                if (_settings.GpuOc && _profile != null) { NvOc.SetClocks(_profile.GpuCore, _profile.GpuMem, out string d); _last = "GPU OC " + d; }
+                else if (!_settings.GpuOc) { NvOc.SetClocks(0, 0, out string d); _last = "GPU OC cleared (" + d + ")"; }
+                Refresh();
+            };
+            _profileMenu.DropDownItems.Add(oc); _ocMenu = oc;
+
+            var smu = new ToolStripMenuItem("Apply CPU undervolt + temp from profile")
+            { Checked = _settings.SmuTuning && RyzenSmu.Supported, CheckOnClick = true, Enabled = RyzenSmu.Supported, ToolTipText = RyzenSmu.Supported ? SmuTip : "Unavailable: " + RyzenSmu.Reason };
+            smu.CheckedChanged += (s, e) =>
+            {
+                if (smu.Checked && !_settings.SmuTuning && MessageBox.Show(SmuRisk, "NvTgpHold", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) { smu.Checked = false; return; }
+                _settings.SmuTuning = smu.Checked; SettingsStore.Save(_settings);
+                if (_settings.SmuTuning && _profile != null) { RyzenSmu.SetThermalLimit(_profile.CpuTemp, out _); RyzenSmu.SetUndervolt(_profile.CpuUv, out string d); _last = "SMU " + d; }
+                else if (!_settings.SmuTuning) { RyzenSmu.SetUndervolt(0, out string d); _last = "undervolt cleared (" + d + ")"; }
+                Refresh();
+            };
+            _profileMenu.DropDownItems.Add(smu); _smuTuningMenu = smu;
+
+            // GPU core/mem overclock picker (experimental): core in 25 MHz steps 100-300, memory in Jose's steps. NvAPI.
+            var ocPick = new ToolStripMenuItem("GPU overclock (core / memory)") { ToolTipText = OcPickTip };
+            var coreMenu = new ToolStripMenuItem("Core offset");
+            coreMenu.DropDownItems.Add(new ToolStripMenuItem("0 (off)", null, (s, e) => SetGpuCore(0)) { Tag = 0 });
+            for (int mhz = 100; mhz <= 300; mhz += 25) { int mm = mhz; coreMenu.DropDownItems.Add(new ToolStripMenuItem("+" + mhz + " MHz", null, (s, e) => SetGpuCore(mm)) { Tag = mhz }); }
+            ocPick.DropDownItems.Add(coreMenu); _gpuCoreMenu = coreMenu;
+            var memMenu = new ToolStripMenuItem("Memory offset");
+            memMenu.DropDownItems.Add(new ToolStripMenuItem("0 (off)", null, (s, e) => SetGpuMem(0)) { Tag = 0 });
+            // Offer only offsets accepted by SetClocks; an impossible choice also poisoned later core changes
+            // because the rejected memory request remained in _gpuMem.
+            foreach (int mhz in new[] { 300, 500, 750, 1000, 1500, 2000 }) { int mm = mhz; memMenu.DropDownItems.Add(new ToolStripMenuItem("+" + mhz + " MHz", null, (s, e) => SetGpuMem(mm)) { Tag = mhz }); }
+            ocPick.DropDownItems.Add(memMenu); _gpuMemMenu = memMenu;
+            var videoMenu = new ToolStripMenuItem("Video clock offset");
+            videoMenu.DropDownItems.Add(new ToolStripMenuItem("0 (off)", null, (s, e) => SetGpuVideo(0)) { Tag = 0 });
+            foreach (int mhz in new[] { 100, 200, 300 }) { int mm = mhz; videoMenu.DropDownItems.Add(new ToolStripMenuItem("+" + mhz + " MHz", null, (s, e) => SetGpuVideo(mm)) { Tag = mhz }); }
+            ocPick.DropDownItems.Add(videoMenu); _gpuVideoMenu = videoMenu;
+            _profileMenu.DropDownItems.Add(ocPick);
+
+            var gm = new ToolStripMenuItem("GPU display mode") { ToolTipText = GpuModeTip };
+            foreach (GpuDisplayMode gmode in new[] { GpuDisplayMode.Eco, GpuDisplayMode.Standard, GpuDisplayMode.Ultimate, GpuDisplayMode.Optimized })
+            { var mm = gmode; gm.DropDownItems.Add(new ToolStripMenuItem(gmode.ToString(), null, (s, e) => DoGpuMode(mm)) { Tag = gmode }); }
+            gm.DropDownOpening += (s, e) =>
+            {
+                var c = GpuMode.Current(out _);
+                foreach (ToolStripMenuItem it in gm.DropDownItems)
+                {
+                    var tag = (GpuDisplayMode)it.Tag;
+                    it.Checked = _settings.GpuOptimized ? tag == GpuDisplayMode.Optimized : (c.HasValue && tag == c.Value);
+                }
+            };
+            _profileMenu.DropDownItems.Add(gm);
+            m.Items.Add(_profileMenu);
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add(new ToolStripMenuItem("Run firmware / driver test", null, (s, e) => RunTest()));
             m.Items.Add(new ToolStripMenuItem("Load vBIOS dump...", null, (s, e) => LoadVbiosDump()));
@@ -159,7 +239,7 @@ namespace NvTgpHold
                 }
                 m.Items.Add(_cpuMenu);
             }
-            m.Items.Add(new ToolStripMenuItem("Stop holding", null, (s, e) => { _holdTargetW = 0; _holdTimer.Stop(); RestorePrior("hold released"); _last = "hold released"; Refresh(); }));
+            m.Items.Add(new ToolStripMenuItem("Stop holding", null, (s, e) => { _holdTargetW = 0; _holdTimer.Stop(); RestorePrior("hold released"); ReturnGpuToProfile(); _last = "hold released"; Refresh(); }));
             m.Items.Add(new ToolStripMenuItem("Restore defaults (95 + 25 stock)", null, (s, e) => DoRestore()));
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add(new ToolStripMenuItem("Exit", null, (s, e) => Application.Exit()));
@@ -213,6 +293,18 @@ namespace NvTgpHold
             bool ok = TgpSync.Restore(_priorPower, AtkAcpi.ReadGpuPower, WriteGpuPower, out string note);
             _sync = note + " (" + why + ")";
             if (ok) _priorPower = -1; else Balloon(_sync);
+            _gpuPower = AtkAcpi.ReadGpuPower();
+        }
+
+        // A CURRENT hold turns Dynamic Boost off and owns the NVPCF added power while it runs. When the hold ends and a
+        // full profile owns the GPU, hand both settings back: RestorePrior put the added power back, but the profile's
+        // Dynamic Boost must be re-applied or it stays at the hold's 0 W until the profile is re-selected or a
+        // power/resume event fires. Re-assert the added power too so the pair matches the profile.
+        private static void ReturnGpuToProfile()
+        {
+            if (_profile == null || GpuGuard.Restarting) return;
+            AtkAcpi.SetBoost(_profile.GpuBoost, out _);
+            AtkAcpi.SetGpuPower(_profile.GpuPower, out _);
             _gpuPower = AtkAcpi.ReadGpuPower();
         }
 
@@ -379,7 +471,14 @@ namespace NvTgpHold
             // Stock means the EC's own ladder too: stop the hold and don't resume it on next launch.
             StopEcHold(); _ecNote = ""; _settings.EcLadder = false;
             if (_ecMenu != null && _ecMenu.Checked) _ecMenu.Checked = false;
-            _cpu = null; _settings.CpuProfile = ""; SettingsStore.Save(_settings); BoostMode.RestorePrior(); _cpuNote = "";
+            _cpu = null; _settings.CpuProfile = ""; _profile = null; _settings.Profile = ""; _profileNote = "";
+            // Stock also means no experimental GPU OC or SMU undervolt left applied.
+            if (_settings.GpuOc) { NvOc.SetClocks(0, 0, out _); _settings.GpuOc = false; if (_ocMenu != null) _ocMenu.Checked = false; }
+            if (_settings.SmuTuning && RyzenSmu.Supported) { RyzenSmu.SetUndervolt(0, out _); _settings.SmuTuning = false; if (_smuTuningMenu != null) _smuTuningMenu.Checked = false; }
+            if (_gpuCore != 0 || _gpuMem != 0) { _gpuCore = 0; _gpuMem = 0; NvOc.SetClocks(0, 0, out _); }
+            if (_gpuVideo != 0) { _gpuVideo = 0; NvOc.SetVideoClock(0, out _); }
+            _fanProfile = null; _settings.FanProfile = ""; _settings.GpuOptimized = false;
+            SettingsStore.Save(_settings); BoostMode.RestorePrior(); _cpuNote = "";
             _sync = "";
             _last = "restored to stock 95+25 (" + gpu + ")";
             Balloon("MAX: " + rm + "\nCURRENT->95: " + rc + "\nBoost->25 (on): " + rb + "\nNVPCF additional->0: " + rp);
@@ -393,6 +492,12 @@ namespace NvTgpHold
         {
             _cpu = p;
             _settings.CpuProfile = p?.Name ?? "";
+            // The CPU menu and a full power profile both drive CPU PPT. A full profile reapplies its own
+            // SPL/SPPT/FPPT on every power/resume/startup, which would silently overwrite this standalone
+            // choice (or a CPU Off). Give CPU PPT a single owner: choosing from the CPU menu hands the
+            // machine back to manual control, so deactivate any active full profile (it leaves the rest of
+            // the hardware at its last-applied values, same as selecting profile Off).
+            if (_profile != null) { _profile = null; _settings.Profile = ""; _profileNote = "profile off (CPU menu took over)"; }
             SettingsStore.Save(_settings);
             if (p == null) { BoostMode.RestorePrior(); _cpuNote = "CPU off"; }
             else ApplyCpu("profile");
@@ -406,6 +511,156 @@ namespace NvTgpHold
             if (ok && _settings.EfficientBoost && !BoostMode.Set(BoostMode.EfficientEnabled, out string bm)) detail += ", " + bm;
             _cpuNote = (ok ? detail : "CPU failed: " + detail) + " (" + why + ")";
             return ok;
+        }
+
+        private const string ProfileTip =
+            "A full profile mirrors one of G-Helper's modes so NvTgpHold can replace it: ASUS platform mode, CPU PPT\n" +
+            "(SPL/SPPT/FPPT), GPU added power + Dynamic Boost + temp target, and both fan curves - all through ASUS ATK.\n" +
+            "Values come from your own G-Helper config. Close G-Helper (and turn its Auto apply off) so the two don't fight.\n" +
+            "The CPU and GPU limits are re-asserted in the background like the holds; fan curves are re-sent on power/resume.";
+
+        private const string FanTip =
+            "A standalone fan curve that overrides the power profile's fans. Silent/Balanced/Turbo are the G-Helper curves;\n" +
+            "Max cooling ramps linearly to 50 C / 50%, then up to 100% at 70 C and flat above. 'Follow power profile' clears\n" +
+            "the override. Applied through ASUS ATK and re-sent on power/resume.";
+        private const string OcPickTip =
+            "Experimental GPU overclock through NvAPI public clock domains. Pick a core (25 MHz steps), memory, or video\n" +
+            "offset; they apply immediately and reset on reboot. An unstable offset causes artifacts or a driver reset.\n" +
+            "Not persisted across restarts. (xbar/sys domains and per-domain voltage undervolt are not available here.)";
+
+        // Standalone fan-curve override. null = follow the active power profile's fans.
+        private static void SetFanProfile(FanProfile f)
+        {
+            _fanProfile = f;
+            _settings.FanProfile = f?.Name ?? "";
+            SettingsStore.Save(_settings);
+            if (f != null) { AtkAcpi.SetFanCurve(false, f.Cpu, out _); AtkAcpi.SetFanCurve(true, f.Gpu, out _); _last = "fan profile: " + f.Name; }
+            else if (_profile != null) { AtkAcpi.SetFanCurve(false, _profile.CpuFan, out _); AtkAcpi.SetFanCurve(true, _profile.GpuFan, out _); _last = "fan: follow " + _profile.Name; }
+            else _last = "fan: follow power profile";
+            Refresh();
+        }
+
+        // Re-applies the standalone fan override if one is set (used on power/resume). Does nothing when following the profile.
+        private static void ReapplyFanProfile()
+        {
+            if (_fanProfile == null) return;
+            AtkAcpi.SetFanCurve(false, _fanProfile.Cpu, out _); AtkAcpi.SetFanCurve(true, _fanProfile.Gpu, out _);
+        }
+
+        private static bool _ocConsented;
+        private static bool ConsentOc() { if (_ocConsented) return true; if (MessageBox.Show(OcRisk, "NvTgpHold", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK) { _ocConsented = true; return true; } return false; }
+        private static void SetGpuCore(int mhz) { if (mhz > 0 && !ConsentOc()) return; _gpuCore = mhz; ApplyManualOc(); }
+        private static void SetGpuMem(int mhz) { if (mhz > 0 && !ConsentOc()) return; _gpuMem = mhz; ApplyManualOc(); }
+        private static void ApplyManualOc() { bool ok = NvOc.SetClocks(_gpuCore, _gpuMem, out string d); _last = "GPU OC " + (ok ? d : "FAIL: " + d); Refresh(); }
+        // Video clock is a separate SetPstates20 call (public VIDEO domain) so it can't break the core/mem path.
+        private static void SetGpuVideo(int mhz) { if (mhz > 0 && !ConsentOc()) return; _gpuVideo = mhz; bool ok = NvOc.SetVideoClock(mhz, out string d); _last = "GPU video OC " + (ok ? d : "FAIL: " + d); Refresh(); }
+
+        // GPU "Optimized" policy: dGPU on (Standard) while on AC, Eco (iGPU only) on battery.
+        private static void ApplyOptimizedEco(string why)
+        {
+            if (!_settings.GpuOptimized) return;
+            bool onBattery = SystemInformation.PowerStatus.PowerLineStatus == PowerLineStatus.Offline;
+            AtkAcpi.SetGpuEco(onBattery ? 1 : 0, out string d);
+            _last = "Optimized: " + (onBattery ? "Eco (battery)" : "Standard (AC)") + " (" + why + ", " + d + ")";
+        }
+
+        private const string OcTip =
+            "Experimental. While on, selecting a profile also applies its GPU core and memory clock offsets through NvAPI\n" +
+            "(the NvTgpHold-Manual profile is +100 core / +1000 memory). Turning it off sets the offset back to 0. Nothing is\n" +
+            "flashed; offsets reset on reboot. Too high an offset causes artifacts or a driver reset.";
+        private const string OcRisk =
+            "Experimental GPU overclock. Selecting a profile will apply its GPU core/memory clock offset through NvAPI.\n" +
+            "An unstable offset can cause screen artifacts, a driver reset, or a crash under load. Offsets reset on reboot\n" +
+            "and turning this off clears them. Only enable this if you accept that.";
+        private const string SmuTip =
+            "Experimental. While on, selecting a profile also sets its CPU temperature limit and Curve Optimizer undervolt\n" +
+            "through the Ryzen SMU (PawnIO). Applied on profile select and power/resume only, never in the fast re-assert.\n" +
+            "Turning it off sets the undervolt back to 0.";
+        private const string SmuRisk =
+            "Experimental CPU tuning over the Ryzen SMU. The SMU mailbox is shared with ASUS services and other tuning\n" +
+            "tools, so a write can collide. An over-aggressive Curve Optimizer undervolt causes instability or crashes that\n" +
+            "may only show under load. The undervolt resets on reboot and turning this off clears it. Enable only if you accept that.";
+        private const string GpuModeTip =
+            "Experimental. Switches the GPU display mode through ASUS ATK. Ultimate (MUX to dGPU) and leaving it need a\n" +
+            "reboot; Eco (iGPU only) and Standard re-initialise the display. Close your work before confirming a reboot.";
+
+        // Confirms, applies the GPU mode, and - for a MUX change - offers the reboot that makes it take effect.
+        private static void DoGpuMode(GpuDisplayMode target)
+        {
+            var cur = GpuMode.Current(out string curDetail);
+            if (!cur.HasValue) { Balloon("GPU mode unavailable: " + curDetail); return; }
+            bool optimized = target == GpuDisplayMode.Optimized;
+            if (!optimized && cur.Value == target && !_settings.GpuOptimized) { Balloon("GPU mode already " + target); return; }
+            string note = target == GpuDisplayMode.Ultimate || cur.Value == GpuDisplayMode.Ultimate
+                ? "This needs a reboot to take effect." : optimized ? "dGPU on AC, Eco (iGPU only) on battery; switches automatically."
+                : "The display will re-initialise (sign out or reboot for a clean switch).";
+            if (MessageBox.Show("Set GPU mode to " + target + "?\nCurrent: " + curDetail + (_settings.GpuOptimized ? " (Optimized policy on)" : "") + ".\n\n" + note + "\nClose games and other GPU apps first.",
+                    "NvTgpHold", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
+            bool ok = GpuMode.Apply(target, out bool reboot, out string detail);
+            _settings.GpuOptimized = optimized; SettingsStore.Save(_settings);
+            if (ok && optimized) { ApplyOptimizedEco("selected"); detail += " | " + _last; }
+            else _last = "GPU mode: " + detail;
+            if (ok && reboot && MessageBox.Show(detail + "\n\nReboot now to apply it? Save your work first.",
+                    "NvTgpHold", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
+                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("shutdown", "/r /t 5 /c \"NvTgpHold GPU mode change\"") { UseShellExecute = false, CreateNoWindow = true }); }
+                catch (Exception ex) { _last = "reboot command failed: " + ex.Message; }
+            Balloon(_last);
+            Refresh();
+        }
+
+        // Applies one full profile (or Off). Order mirrors G-Helper: ASUS mode first (EC loads its baseline), then the
+        // fan curves, then CPU PPT (reusing the existing re-assert path via _cpu), then GPU temp / boost / power. The GPU
+        // boost + added power are left to a CURRENT hold when one is active (the hold owns 0x98/boost and re-syncs them).
+        private static void SetProfile(PowerProfile p)
+        {
+            _profile = p;
+            _settings.Profile = p?.Name ?? "";
+            if (p == null)
+            {
+                // Stop managing: leave the hardware at the last-applied values, stop re-asserting CPU PPT.
+                _cpu = null; _settings.CpuProfile = ""; SettingsStore.Save(_settings);
+                _profileNote = "profile off"; Refresh(); return;
+            }
+            SettingsStore.Save(_settings);
+            ApplyProfile(p, "selected", full: true);
+        }
+
+        private static void ApplyProfile(PowerProfile p, string why, bool full)
+        {
+            if (p == null || GpuGuard.Restarting) return;
+            var notes = new System.Text.StringBuilder();
+            if (full)
+            {
+                AtkAcpi.SetMode(p.AsusMode, out string md); notes.Append(md);
+                System.Threading.Thread.Sleep(400);                 // let the mode's EC baseline settle before overriding it
+                // A standalone fan override wins over the profile's own fan curves.
+                byte[] cpuFan = _fanProfile?.Cpu ?? p.CpuFan, gpuFan = _fanProfile?.Gpu ?? p.GpuFan;
+                bool cf = AtkAcpi.SetFanCurve(false, cpuFan, out string cfd);
+                bool gf = AtkAcpi.SetFanCurve(true, gpuFan, out string gfd);
+                notes.Append(_fanProfile != null ? ", fan[" + _fanProfile.Name + "]" : "").Append(", ").Append(cf ? cfd : "cpuFan FAIL: " + cfd).Append(", ").Append(gf ? gfd : "gpuFan FAIL: " + gfd);
+                _cpu = p.Cpu; _settings.CpuProfile = ""; SettingsStore.Save(_settings);   // profile drives PPT; clear the standalone CPU preset
+                ApplyCpu("profile");                                // SPL/SPPT/FPPT + (optional) efficient-boost, re-asserted by Auto
+            }
+            AtkAcpi.SetGpuTemp(p.GpuTemp, out string gt); notes.Append(full ? ", " + gt : gt);
+            if (_holdTargetW <= 0)
+            {
+                AtkAcpi.SetBoost(p.GpuBoost, out string bd);
+                AtkAcpi.SetGpuPower(p.GpuPower, out string pd);
+                notes.Append(", ").Append(bd).Append(", ").Append(pd);
+            }
+            else notes.Append(", GPU power/boost held by CURRENT hold");
+            // Experimental, opt-in, full apply only (never the fast re-assert): GPU clock offset (NVAPI) and CPU temp +
+            // undervolt (Ryzen SMU). Each is skipped unless its toggle is on; a failure is reported, not fatal.
+            if (full && _settings.GpuOc) { bool ok = NvOc.SetClocks(p.GpuCore, p.GpuMem, out string od); notes.Append(ok ? ", OC " + od : ", OC FAIL: " + od); }
+            if (full && _settings.SmuTuning && RyzenSmu.Supported)
+            {
+                RyzenSmu.SetThermalLimit(p.CpuTemp, out string td);
+                RyzenSmu.SetUndervolt(p.CpuUv, out string ud);
+                notes.Append(", ").Append(td).Append(", ").Append(ud);
+            }
+            _profileNote = "profile " + p.Name + ": " + notes + " (" + why + ")";
+            if (full) { _last = "profile " + p.Name + " applied"; if (why == "selected") Balloon(_profileNote); }
+            Refresh();
         }
 
         // Timer path: E633 at the hold value (the same call the firmware test uses as a no-op when nothing moved) and the
@@ -521,6 +776,10 @@ namespace NvTgpHold
             // At most once per 10 s so a write the BIOS rejects doesn't re-notify NVPCF every poll.
             else if (_syncTgp && _holdTargetW > 0 && (_gpuPower != TgpSync.Additional(_holdTargetW, _gpuBase, HoldBoost, MaxW, out _) || _sync.StartsWith("sync unavailable", StringComparison.Ordinal)) && (DateTime.UtcNow - _lastSync).TotalSeconds >= 10)
                 SyncTgp("was " + (_gpuPower < 0 ? "?" : _gpuPower + " W") + " " + DateTime.Now.ToString("HH:mm:ss"));
+            // A profile's GPU added power drifted (an ASUS/EC mode change, Armoury) and no CURRENT hold owns 0x98: put it
+            // back. Only writes on an actual mismatch, so NVPCF isn't re-notified every poll.
+            if (_profile != null && _holdTargetW <= 0 && _gpuPower >= 0 && _gpuPower != _profile.GpuPower)
+            { AtkAcpi.SetGpuPower(_profile.GpuPower, out _); _gpuPower = AtkAcpi.ReadGpuPower(); }
             // Something else (driver, EC, ASUS services) pulled the enforced limit down: put it back now rather than
             // waiting for the 5-min tick. At most once per 2 s so a write that won't stick doesn't spin.
             if (_holdTargetW > 0 && !double.IsNaN(_enf) && _enf < _holdTargetW - 1 && (DateTime.UtcNow - _lastReassert).TotalSeconds >= 2)
@@ -541,8 +800,13 @@ namespace NvTgpHold
             string mx = double.IsNaN(_max) ? "?" : _max.ToString("0", CultureInfo.InvariantCulture);
             string hold = _holdTargetW > 0 ? ("HOLD " + _holdTargetW + " W") : "hold off";
             string nv = (_gpuBase >= 0 ? _gpuBase.ToString(CultureInfo.InvariantCulture) : "?") + "+" + (_gpuPower >= 0 ? _gpuPower.ToString(CultureInfo.InvariantCulture) : "?");
-            string extra = (_cpuNote.Length > 0 ? "  |  " + _cpuNote : "") + (_ecNote.Length > 0 ? "  |  " + _ecNote : "") + (_settings.Auto ? "  |  every " + _settings.IntervalS + " s" + (_autoNote.Length > 0 ? ", " + _autoNote : "") : "") + (_ghelper.Length > 0 ? "  |  " + _ghelper : "");
+            string extra = (_profile != null ? "  |  [" + _profile.Name + "]" : "") + (_profileNote.Length > 0 && _profile == null ? "  |  " + _profileNote : "") + (_cpuNote.Length > 0 ? "  |  " + _cpuNote : "") + (_ecNote.Length > 0 ? "  |  " + _ecNote : "") + (_settings.Auto ? "  |  every " + _settings.IntervalS + " s" + (_autoNote.Length > 0 ? ", " + _autoNote : "") : "") + (_ghelper.Length > 0 ? "  |  " + _ghelper : "");
             if (_status != null) _status.Text = hold + "  |  enf " + enf + " / max " + mx + " W  |  NVPCF " + nv + " W" + (_sync.Length > 0 ? " (" + _sync + ")" : "") + "  |  " + _last + extra;
+            if (_profileMenu != null) foreach (ToolStripItem it in _profileMenu.DropDownItems) if (it is ToolStripMenuItem mi && mi.Tag is string tag) mi.Checked = tag == (_profile?.Name ?? "");
+            if (_fanMenu != null) foreach (ToolStripMenuItem it in _fanMenu.DropDownItems) if (it.Tag is string ft) it.Checked = ft == (_fanProfile?.Name ?? "");
+            if (_gpuCoreMenu != null) foreach (ToolStripMenuItem it in _gpuCoreMenu.DropDownItems) it.Checked = it.Tag is int c && c == _gpuCore;
+            if (_gpuMemMenu != null) foreach (ToolStripMenuItem it in _gpuMemMenu.DropDownItems) it.Checked = it.Tag is int me && me == _gpuMem;
+            if (_gpuVideoMenu != null) foreach (ToolStripMenuItem it in _gpuVideoMenu.DropDownItems) it.Checked = it.Tag is int vi && vi == _gpuVideo;
             if (_intervalMenu != null) foreach (ToolStripMenuItem it in _intervalMenu.DropDownItems) it.Checked = (int)it.Tag == _settings.IntervalS;
             if (_cpuMenu != null) foreach (ToolStripItem it in _cpuMenu.DropDownItems) if (it is ToolStripMenuItem mi && !mi.CheckOnClick) mi.Checked = (mi.Tag as string) == (_cpu?.Name) || (mi.Tag == null && _cpu == null);
             if (_holdMenu != null) foreach (ToolStripMenuItem it in _holdMenu.DropDownItems) it.Checked = (_holdTargetW > 0 && it.Text == _holdTargetW + " W");

@@ -15,7 +15,7 @@ dotnet test tests/NvTgpHold.Tests -c Release
 ```
 
 The application output is in `bin/Release/`. Keep the complete output together,
-including `LpcACPIEC.bin`. The module's provenance and license are in
+including `LpcACPIEC.bin` and `RyzenSMU.bin`. The modules' provenance and license are in
 [third_party/PawnIO.Modules.md](../third_party/PawnIO.Modules.md).
 
 The hardware-free test project targets plain .NET 9 and can run on Linux/macOS
@@ -54,7 +54,7 @@ Do not maintain a separate set of wiki instructions by hand.
    dotnet publish NvTgpHold.csproj -c Release -r win-x64 --self-contained false -o publish
    ```
 
-4. Package the published application files with `LpcACPIEC.bin`, the MIT license,
+4. Package the published application files with `LpcACPIEC.bin`, `RyzenSMU.bin`, the MIT license,
    `third_party/` license/provenance notices and `docs/`. Exclude symbols and temporary files.
    Include the LGPL module's matching source archive under `third_party/`, as
    identified in its provenance notice.

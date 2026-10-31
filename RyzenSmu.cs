@@ -33,6 +33,44 @@ namespace NvTgpHold
         private static readonly object _lock = new object();
         private static IntPtr _h = IntPtr.Zero;
         private static readonly ulong[] _in1 = new ulong[1], _in2 = new ulong[2], _out1 = new ulong[1];
+        private const int PciBusy = -2;   // couldn't take the shared PCI lock in time; treated as a transport failure
+
+        // Cross-process PCI config-space lock. The PawnIO RyzenSMU module reaches the SMU through PCI config space
+        // (0xC4/0xC8 indirect) on every SMU/register IOCTL, and PawnIO's design puts that lock on the user-mode caller,
+        // not the module: the caller must hold the named mutant \BaseNamedObjects\Access_PCI (opened from Win32 as
+        // Global\Access_PCI, the object LibreHardwareMonitor/HWiNFO/WinRing0 tools already coordinate on) around each
+        // IOCTL and release it right after. Our _lock only orders our own threads, so without this a concurrent
+        // G-Helper/LHM PCI access can interleave our index/data pair. Ref: PawnIO.Modules AMD CPU modules,
+        // "Synchronization Requirements" / "Multi-Tool Coexistence".
+        private static Mutex _pci;
+        private static bool _pciTried;
+
+        private static Mutex PciLock()
+        {
+            if (_pciTried) return _pci;
+            _pciTried = true;
+            try { _pci = new Mutex(false, @"Global\Access_PCI"); }
+            catch (UnauthorizedAccessException) { if (!Mutex.TryOpenExisting(@"Global\Access_PCI", out _pci)) _pci = null; }
+            catch { _pci = null; }
+            return _pci;
+        }
+
+        // Runs one PawnIO IOCTL holding Access_PCI for just that transaction (never across the mailbox poll loop, so we
+        // don't block other tools for a whole command). Bounded 200 ms wait: on timeout we skip the IOCTL rather than
+        // touch PCI unsynchronised; an abandoned mutex (holder died) still grants ownership.
+        private static int Execute(string name, ulong[] input, UIntPtr inSize, ulong[] output, UIntPtr outSize, out UIntPtr ret)
+        {
+            ret = UIntPtr.Zero;
+            var m = PciLock();
+            bool held = false;
+            try
+            {
+                if (m != null) { try { held = m.WaitOne(200); } catch (AbandonedMutexException) { held = true; } }
+                if (m != null && !held) return PciBusy;
+                return pawnio_execute(_h, name, input, inSize, output, outSize, out ret);
+            }
+            finally { if (held) { try { m.ReleaseMutex(); } catch { } } }
+        }
         public static bool Supported { get; private set; }
         public static string Reason { get; private set; } = "SMU not initialised";
         public static int CodeName { get; private set; } = -1;
@@ -76,19 +114,23 @@ namespace NvTgpHold
 
         public static void Close()
         {
-            lock (_lock) { if (_h != IntPtr.Zero) { try { pawnio_close(_h); } catch { } _h = IntPtr.Zero; } }
+            lock (_lock)
+            {
+                if (_h != IntPtr.Zero) { try { pawnio_close(_h); } catch { } _h = IntPtr.Zero; }
+                if (_pci != null) { try { _pci.Dispose(); } catch { } _pci = null; _pciTried = false; }
+            }
         }
 
         private static int ReadCodeName()
         {
-            if (pawnio_execute(_h, "ioctl_get_code_name", null, UIntPtr.Zero, _out1, (UIntPtr)1, out _) < 0) return -1;
+            if (Execute("ioctl_get_code_name", null, UIntPtr.Zero, _out1, (UIntPtr)1, out _) < 0) return -1;
             return (int)_out1[0];
         }
 
         private static bool GetSmuVersion(out uint ver)
         {
             ver = 0;
-            if (pawnio_execute(_h, "ioctl_get_smu_version", null, UIntPtr.Zero, _out1, (UIntPtr)1, out _) < 0) return false;
+            if (Execute("ioctl_get_smu_version", null, UIntPtr.Zero, _out1, (UIntPtr)1, out _) < 0) return false;
             ver = (uint)_out1[0];
             return ver != 0;
         }
@@ -97,7 +139,7 @@ namespace NvTgpHold
         {
             value = 0;
             _in1[0] = addr;
-            if (pawnio_execute(_h, "ioctl_read_smu_register", _in1, (UIntPtr)1, _out1, (UIntPtr)1, out _) < 0) return false;
+            if (Execute("ioctl_read_smu_register", _in1, (UIntPtr)1, _out1, (UIntPtr)1, out _) < 0) return false;
             value = (uint)_out1[0];
             return true;
         }
@@ -105,7 +147,7 @@ namespace NvTgpHold
         private static bool WriteReg(uint addr, uint value)
         {
             _in2[0] = addr; _in2[1] = value;
-            return pawnio_execute(_h, "ioctl_write_smu_register", _in2, (UIntPtr)2, null, UIntPtr.Zero, out _) >= 0;
+            return Execute("ioctl_write_smu_register", _in2, (UIntPtr)2, null, UIntPtr.Zero, out _) >= 0;
         }
 
         // SMU mailbox: wait ready, clear response, write the six arg words, write the command, poll the response.

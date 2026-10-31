@@ -8,10 +8,13 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../TgpSync.cs" Link="TgpSync.cs" />
+    <Compile Include="../../AtkAcpi.cs" Link="AtkAcpi.cs" />
     <Compile Include="../../AutoAssert.cs" Link="AutoAssert.cs" />
     <Compile Include="../../EcLadderTarget.cs" Link="EcLadderTarget.cs" />
     <Compile Include="../../Profiles.cs" Link="Profiles.cs" />
     <Compile Include="../../ClockDomainLayout.cs" Link="ClockDomainLayout.cs" />
+    <Compile Include="../../HoldApply.cs" Link="HoldApply.cs" />
+    <Compile Include="../../EtwFpsMonitor.cs" Link="EtwFpsMonitor.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

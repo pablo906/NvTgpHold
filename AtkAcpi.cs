@@ -20,6 +20,7 @@ namespace NvTgpHold
         private const uint CpuSplId = 0x001200A3u, CpuSpptId = 0x001200A0u, CpuFpptId = 0x001200C1u;
         private const uint PerfModeId = 0x00120075u, GpuTempId = 0x001200C2u;              // ASUS platform mode, NVIDIA GPU temp target
         private const uint CpuFanCurveId = 0x00110024u, GpuFanCurveId = 0x00110025u;       // DevsCPUFanCurve / DevsGPUFanCurve (G-Helper)
+        private const uint CpuFanId = 0x00110013u, GpuFanId = 0x00110014u;                 // CPU_Fan / GPU_Fan read (G-Helper); value * 100 = RPM
         private const uint GpuEcoId = 0x00090020u, GpuMuxId = 0x00090016u;                 // GPUEcoROG / GPUMuxROG (G-Helper)
         private const uint Devs = 0x53564544u, Dsts = 0x53545344u; // "DEVS", "DSTS"
 
@@ -160,6 +161,21 @@ namespace NvTgpHold
             if (!Call(Devs, GpuEcoId, (uint)value, out uint r, out detail)) return false;
             if (r != 1) { detail = "ASUS rejected the GPU Eco request (r=" + r + ")"; return false; }
             detail = "eco=" + value + " (r=" + r + ")"; return true;
+        }
+
+        // CPU or GPU fan speed in RPM (ASUS reports RPM/100), or -1 if it can't be read.
+        public static int ReadFan(bool gpu)
+        {
+            if (!Call(Dsts, gpu ? GpuFanId : CpuFanId, 0u, out uint r, out _)) return -1;
+            return DecodeFan(r);
+        }
+
+        // Decodes a DSTS fan reply to RPM: TgpSync.Decode validates the 0x0001xxxx presence flag and returns -1 for an
+        // unsupported reply (e.g. the 0xFFFFFFFE sentinel), so that never scales into a fabricated RPM; the low word is RPM/100.
+        internal static int DecodeFan(uint r)
+        {
+            int rpm100 = TgpSync.Decode(r);
+            return rpm100 < 0 ? -1 : rpm100 * 100;
         }
 
         // Variable component (0x98) in watts, or -1 if it can't be read.

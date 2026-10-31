@@ -137,6 +137,7 @@ namespace NvTgpHold.Tests
         public void Manual_profile_uses_max_cooling_and_gpu_85()
         {
             var m = PowerProfiles.Find("NvTgpHold-Manual");
+            Assert.Equal((18, 28, 45), (m.Spl, m.Sppt, m.Fppt));  // Jose's spec: CPU 18/28/45 W
             Assert.Equal(85, m.GpuTemp);                         // Jose's spec: GPU max 85 C
             Assert.Equal(90, m.CpuTemp);                         // CPU max 90 C
             Assert.Equal(-25, m.CpuUv);                          // -25 CO

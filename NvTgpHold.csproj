@@ -17,7 +17,8 @@
   <ItemGroup>
     <Compile Remove="tests/**" />
     <EmbeddedResource Include="app.ico" LogicalName="NvTgpHold.app.ico" />
-    <!-- Signed PawnIO EC module (LGPL-2.1, namazso/PawnIO.Modules 0.2.11), loaded by EcLadder.cs. See third_party/PawnIO.Modules.md. -->
+    <!-- Signed PawnIO modules (LGPL-2.1, namazso/PawnIO.Modules), loaded by EcLadder.cs / RyzenSmu.cs. See third_party/PawnIO.Modules.md. -->
     <None Include="third_party/LpcACPIEC.bin" Link="LpcACPIEC.bin" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="third_party/RyzenSMU.bin" Link="RyzenSMU.bin" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

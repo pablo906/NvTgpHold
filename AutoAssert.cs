@@ -72,6 +72,8 @@ namespace NvTgpHold
         public bool EfficientBoost = true;
         public bool EcLadder;              // hold the EC CPU ladder at step 0 (GA403WW BIOS 312 only)
         public string Profile = "";        // active full power profile (PowerProfiles name), "" = off
+        public bool GpuOc;                 // experimental: apply the profile's GPU core/mem clock offset (NVAPI)
+        public bool SmuTuning;             // experimental: apply the profile's CPU temp limit + undervolt (Ryzen SMU)
 
         public static Settings Parse(IEnumerable<string> lines)
         {
@@ -90,6 +92,8 @@ namespace NvTgpHold
                     case "effboost": s.EfficientBoost = v != "0"; break;
                     case "ecladder": s.EcLadder = v == "1"; break;
                     case "profile": s.Profile = PowerProfiles.Find(v)?.Name ?? ""; break;
+                    case "gpuoc": s.GpuOc = v == "1"; break;
+                    case "smutuning": s.SmuTuning = v == "1"; break;
                 }
             }
             return s;
@@ -103,6 +107,8 @@ namespace NvTgpHold
             "effboost=" + (EfficientBoost ? "1" : "0"),
             "ecladder=" + (EcLadder ? "1" : "0"),
             "profile=" + Profile,
+            "gpuoc=" + (GpuOc ? "1" : "0"),
+            "smutuning=" + (SmuTuning ? "1" : "0"),
         };
     }
 

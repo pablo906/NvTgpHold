@@ -16,13 +16,15 @@ namespace NvTgpHold
         public readonly int GpuPower;              // ATK 0x98 additional GPU power (W) = GHelper gpu_power
         public readonly int GpuBoost;              // ATK 0xC0 NVIDIA Dynamic Boost (W) = GHelper gpu_boost
         public readonly int GpuTemp;               // ATK 0xC2 NVIDIA GPU temp target (C) = GHelper gpu_temp
-        public readonly int CpuUv;                 // Curve Optimizer counts (experimental, not applied) = GHelper cpu_uv
+        public readonly int CpuTemp;               // SMU thermal limit (C), experimental = GHelper cpu_temp
+        public readonly int CpuUv;                 // SMU Curve Optimizer counts, experimental = GHelper cpu_uv
+        public readonly int GpuCore, GpuMem;       // NVAPI core/memory clock offsets (MHz), experimental = GHelper gpu_core/gpu_memory
         public readonly byte[] CpuFan, GpuFan;     // 16-byte ATK fan curves (8 temps + 8 percents) = GHelper fan_profile_*
 
-        public PowerProfile(string name, int asusMode, int spl, int sppt, int fppt, int gpuPower, int gpuBoost, int gpuTemp, int cpuUv, string cpuFan, string gpuFan)
+        public PowerProfile(string name, int asusMode, int spl, int sppt, int fppt, int gpuPower, int gpuBoost, int gpuTemp, int cpuTemp, int cpuUv, int gpuCore, int gpuMem, string cpuFan, string gpuFan)
         {
             Name = name; AsusMode = asusMode; Spl = spl; Sppt = sppt; Fppt = fppt;
-            GpuPower = gpuPower; GpuBoost = gpuBoost; GpuTemp = gpuTemp; CpuUv = cpuUv;
+            GpuPower = gpuPower; GpuBoost = gpuBoost; GpuTemp = gpuTemp; CpuTemp = cpuTemp; CpuUv = cpuUv; GpuCore = gpuCore; GpuMem = gpuMem;
             CpuFan = ParseCurve(cpuFan); GpuFan = ParseCurve(gpuFan);
         }
 
@@ -47,11 +49,11 @@ namespace NvTgpHold
         // G-Helper's ACPI path uses: PPT_APUA3 / PPT_APUA0 / PPT_APUC1). Manual == his custom mode 3 (base Turbo, +OC).
         public static readonly PowerProfile[] Presets =
         {
-            //                     name              mode spl sppt fppt gpuP boost gpuT  uv   cpuFan                                              gpuFan
-            new PowerProfile("Silent",            2, 28, 45, 65,   0,   5,  85, -25, "1E-31-3B-42-47-50-5A-64-00-00-03-0C-14-1C-22-29", "1E-31-3B-42-47-50-5A-64-00-00-04-11-1B-23-28-2D"),
-            new PowerProfile("Balanced",          0, 35, 50, 65,  15,  25,  85, -20, "1E-28-32-3C-46-50-5A-64-00-09-14-1E-28-33-64-64", "1E-28-33-3C-46-50-5A-64-00-09-13-1D-27-32-64-64"),
-            new PowerProfile("Turbo",             1, 35, 45, 55,  70,  25,  87, -25, "1E-28-32-3C-46-50-5A-64-11-1E-28-34-46-64-64-64", "1E-28-32-3C-46-50-5A-64-16-1F-28-32-46-64-64-64"),
-            new PowerProfile("NvTgpHold-Manual",  1, 35, 50, 65,  70,  25,  87, -25, "1E-28-32-3C-46-50-5A-64-11-1E-28-34-46-64-64-64", "1E-28-32-3C-46-50-5A-64-16-1F-28-32-46-64-64-64"),
+            //                     name              mode spl sppt fppt gpuP boost gpuT cpuT  uv  core mem   cpuFan                                              gpuFan
+            new PowerProfile("Silent",            2, 28, 45, 65,   0,   5,  85,  96, -25,   0,    0, "1E-31-3B-42-47-50-5A-64-00-00-03-0C-14-1C-22-29", "1E-31-3B-42-47-50-5A-64-00-00-04-11-1B-23-28-2D"),
+            new PowerProfile("Balanced",          0, 35, 50, 65,  15,  25,  85,  95, -20,   0,    0, "1E-28-32-3C-46-50-5A-64-00-09-14-1E-28-33-64-64", "1E-28-33-3C-46-50-5A-64-00-09-13-1D-27-32-64-64"),
+            new PowerProfile("Turbo",             1, 35, 45, 55,  70,  25,  87,  96, -25,   0,    0, "1E-28-32-3C-46-50-5A-64-11-1E-28-34-46-64-64-64", "1E-28-32-3C-46-50-5A-64-16-1F-28-32-46-64-64-64"),
+            new PowerProfile("NvTgpHold-Manual",  1, 35, 50, 65,  70,  25,  87,  90, -25, 100, 1000, "1E-28-32-3C-46-50-5A-64-11-1E-28-34-46-64-64-64", "1E-28-32-3C-46-50-5A-64-16-1F-28-32-46-64-64-64"),
         };
 
         public static PowerProfile Find(string name)

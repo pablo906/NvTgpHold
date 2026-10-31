@@ -20,6 +20,7 @@ namespace NvTgpHold
         private const uint CpuSplId = 0x001200A3u, CpuSpptId = 0x001200A0u, CpuFpptId = 0x001200C1u;
         private const uint PerfModeId = 0x00120075u, GpuTempId = 0x001200C2u;              // ASUS platform mode, NVIDIA GPU temp target
         private const uint CpuFanCurveId = 0x00110024u, GpuFanCurveId = 0x00110025u;       // DevsCPUFanCurve / DevsGPUFanCurve (G-Helper)
+        private const uint GpuEcoId = 0x00090020u, GpuMuxId = 0x00090016u;                 // GPUEcoROG / GPUMuxROG (G-Helper)
         private const uint Devs = 0x53564544u, Dsts = 0x53545344u; // "DEVS", "DSTS"
 
         [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -136,6 +137,25 @@ namespace NvTgpHold
             }
             detail = "CPU " + spl + "/" + sppt + "/" + fppt + " W";
             return true;
+        }
+
+        // GPU MUX / Eco state (G-Helper GPUModeControl): GPUMux 0 = Ultimate (MUX to dGPU), !=0 = hybrid/Optimus;
+        // GPUEco 1 = Eco (iGPU only). Both are read raw (not the 0x0001xxxx wattage encoding). -1 = unsupported/unreadable.
+        public static int ReadGpuMux() => ReadDsts(GpuMuxId);
+        public static int ReadGpuEco() => ReadDsts(GpuEcoId);
+
+        // Sets the MUX (1 = Optimus/Standard, 0 = Ultimate). A MUX change needs a reboot to take effect.
+        public static bool SetGpuMux(int value, out string detail)
+        {
+            if (!Call(Devs, GpuMuxId, (uint)value, out uint r, out detail)) return false;
+            detail = "mux=" + value + " (r=" + r + ")"; return true;
+        }
+
+        // Sets Eco (1 = iGPU only / dGPU off, 0 = dGPU on). No MUX change, but the display stack re-initialises.
+        public static bool SetGpuEco(int value, out string detail)
+        {
+            if (!Call(Devs, GpuEcoId, (uint)value, out uint r, out detail)) return false;
+            detail = "eco=" + value + " (r=" + r + ")"; return true;
         }
 
         // Variable component (0x98) in watts, or -1 if it can't be read.

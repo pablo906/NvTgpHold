@@ -80,11 +80,29 @@ namespace NvTgpHold.Tests
         }
 
         [Fact]
-        public void Settings_round_trip_the_profile()
+        public void Only_manual_carries_gpu_oc_and_each_profile_has_a_cpu_temp()
         {
-            var back = Settings.Parse(new Settings { Profile = "Turbo" }.Serialize());
+            foreach (var p in PowerProfiles.Presets) Assert.InRange(p.CpuTemp, 70, 100);
+            var manual = PowerProfiles.Find("NvTgpHold-Manual");
+            Assert.Equal((100, 1000), (manual.GpuCore, manual.GpuMem));   // GHelper gpu_core_3 / gpu_memory_3
+            Assert.Equal(90, manual.CpuTemp);
+            foreach (var p in new[] { "Silent", "Balanced", "Turbo" })
+            {
+                var pr = PowerProfiles.Find(p);
+                Assert.Equal((0, 0), (pr.GpuCore, pr.GpuMem));             // no OC on the stock-mirroring profiles
+            }
+        }
+
+        [Fact]
+        public void Settings_round_trip_the_profile_and_experimental_flags()
+        {
+            var back = Settings.Parse(new Settings { Profile = "Turbo", GpuOc = true, SmuTuning = true }.Serialize());
             Assert.Equal("Turbo", back.Profile);
+            Assert.True(back.GpuOc);
+            Assert.True(back.SmuTuning);
             Assert.Equal("", Settings.Parse(new[] { "profile=bogus" }).Profile);   // unknown name rejected
+            var def = Settings.Parse(new string[0]);
+            Assert.False(def.GpuOc); Assert.False(def.SmuTuning);                   // experimental off by default
         }
     }
 }

@@ -31,6 +31,7 @@ See [Installation](docs/Installation.md) for upgrading and optional startup task
 | Auto re-assert | Optionally resend the GPU hold and CPU profile every 1–30 seconds; default interval is 2 seconds. |
 | CPU power profiles | Apply 18 / 28 / 35 / 45 W sustained CPU profiles on AMD Strix Point, with optional Windows Efficient Enabled boost mode. |
 | Experimental EC CPU ladder hold | On GA403WW BIOS 312 only, periodically reset EC throttle accumulators. Requires PawnIO and explicit opt-in. |
+| Experimental profile expansions | Opt-in, behind consent: GPU core/memory overclock (NvAPI), CPU undervolt + temperature (Ryzen SMU via PawnIO), and GPU display-mode (Eco/Standard/Ultimate) switching with a reboot prompt. |
 
 Menu presets are available targets, **not validated safe power ratings** for your
 laptop. Re-applying limits cannot guarantee that firmware will sustain them.

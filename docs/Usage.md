@@ -45,11 +45,28 @@ CURRENT**, if active, owns the GPU power and boost while the profile owns the re
 Close G-Helper and turn off its **Auto apply** power option first, or the two will
 overwrite each other. The active profile and its CPU limits are restored on launch.
 
-Undervolt (Curve Optimizer), GPU core/memory OC and GPU-mode (Eco/Standard/Ultimate)
-switching are **planned experimental expansions**, not yet wired: they need an SMU /
-mVolt+-style primitive the tool does not have, and a sign-out for the GPU mode. A
-profile stores its undervolt value but does not apply it. Do not run the experimental
-EC CPU ladder hold at the same time as a profile — both can touch the EC fan state.
+### Experimental expansions
+
+These are **off by default and opt-in**, each behind a consent dialog, like the EC
+ladder hold. They are under **Power profile → Experimental expansions**.
+
+- **GPU core/memory overclock** (NvAPI). While on, selecting a profile also applies
+  its GPU clock offsets (the NvTgpHold-Manual profile is +100 MHz core / +1000 MHz
+  memory); the others are 0. Turning it off sets the offset back to 0. Nothing is
+  flashed and offsets reset on reboot. Too high an offset causes artifacts or a reset.
+- **CPU undervolt + temperature** (Ryzen SMU, via PawnIO and the signed `RyzenSMU.bin`
+  module next to the exe). While on, selecting a profile also sets its CPU temperature
+  limit and all-core Curve Optimizer offset through the SMU. Applied on profile select
+  and power/resume only, never in the fast re-assert. Turning it off clears the
+  undervolt. The SMU mailbox is shared with ASUS services, so a write can collide; an
+  over-aggressive undervolt destabilises under load. Only Strix Point (Ryzen AI 300) is
+  enabled.
+- **GPU display mode** (ASUS ATK): Eco / Standard / Ultimate. Switching into or out of
+  Ultimate (MUX) needs a reboot, which NvTgpHold offers after you confirm; Eco and
+  Standard re-initialise the display (sign out or reboot for a clean switch).
+
+Do not run the experimental EC CPU ladder hold at the same time as a profile — both can
+touch the EC fan state.
 
 ## GPU limits and status
 

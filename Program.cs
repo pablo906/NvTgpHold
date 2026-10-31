@@ -51,7 +51,7 @@ namespace NvTgpHold
         private static Settings _settings = new Settings();
         private static CpuProfile _cpu;                     // active CPU profile, null = not asserting CPU limits
         private static PowerProfile _profile;               // active full power profile (replaces G-Helper), null = off
-        private static ToolStripMenuItem _profileMenu;
+        private static ToolStripMenuItem _profileMenu, _ocMenu, _smuTuningMenu;
         private static string _profileNote = "";
         private static string _cpuNote = "", _autoNote = "", _ghelper = "";
         private static int _autoTicks = 0;
@@ -65,6 +65,7 @@ namespace NvTgpHold
             Application.SetCompatibleTextRenderingDefault(false);
             CpuInfo.Detect();
             EcLadder.Detect();
+            RyzenSmu.Detect();
             _settings = SettingsStore.Load();
             _tray = new NotifyIcon { Icon = AppIcon.Load(), Visible = true, Text = "NvTgpHold" };
             _tray.ContextMenuStrip = BuildMenu();
@@ -85,7 +86,7 @@ namespace NvTgpHold
             if (savedProfile != null) { _profile = savedProfile; ApplyProfile(savedProfile, "startup", full: true); }
             else if (CpuInfo.StrixPoint && CpuProfiles.Find(_settings.CpuProfile) != null) SetCpuProfile(CpuProfiles.Find(_settings.CpuProfile));
             Refresh();
-            Application.ApplicationExit += (s, e) => { RestorePrior("exit"); BoostMode.RestorePrior(); StopEcHold(exiting: true); if (_tray != null) _tray.Visible = false; };
+            Application.ApplicationExit += (s, e) => { RestorePrior("exit"); BoostMode.RestorePrior(); StopEcHold(exiting: true); RyzenSmu.Close(); if (_tray != null) _tray.Visible = false; };
             Application.Run();
         }
 
@@ -99,7 +100,36 @@ namespace NvTgpHold
             _profileMenu.DropDownItems.Add(new ToolStripMenuItem("Off (stop managing)", null, (s, e) => SetProfile(null)) { Tag = "" });
             foreach (var p in PowerProfiles.Presets) { var pp = p; _profileMenu.DropDownItems.Add(new ToolStripMenuItem(p.Name, null, (s, e) => SetProfile(pp)) { Tag = p.Name, ToolTipText = p.Summary }); }
             _profileMenu.DropDownItems.Add(new ToolStripSeparator());
-            _profileMenu.DropDownItems.Add(new ToolStripMenuItem("Undervolt / GPU OC / GPU-mode: planned (experimental)") { Enabled = false, ToolTipText = ExpansionTip });
+            _profileMenu.DropDownItems.Add(new ToolStripMenuItem("Experimental expansions") { Enabled = false });
+
+            var oc = new ToolStripMenuItem("Apply GPU core/mem OC from profile") { Checked = _settings.GpuOc, CheckOnClick = true, ToolTipText = OcTip };
+            oc.CheckedChanged += (s, e) =>
+            {
+                if (oc.Checked && !_settings.GpuOc && MessageBox.Show(OcRisk, "NvTgpHold", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) { oc.Checked = false; return; }
+                _settings.GpuOc = oc.Checked; SettingsStore.Save(_settings);
+                if (_settings.GpuOc && _profile != null) { NvOc.SetClocks(_profile.GpuCore, _profile.GpuMem, out string d); _last = "GPU OC " + d; }
+                else if (!_settings.GpuOc) { NvOc.SetClocks(0, 0, out string d); _last = "GPU OC cleared (" + d + ")"; }
+                Refresh();
+            };
+            _profileMenu.DropDownItems.Add(oc); _ocMenu = oc;
+
+            var smu = new ToolStripMenuItem("Apply CPU undervolt + temp from profile")
+            { Checked = _settings.SmuTuning && RyzenSmu.Supported, CheckOnClick = true, Enabled = RyzenSmu.Supported, ToolTipText = RyzenSmu.Supported ? SmuTip : "Unavailable: " + RyzenSmu.Reason };
+            smu.CheckedChanged += (s, e) =>
+            {
+                if (smu.Checked && !_settings.SmuTuning && MessageBox.Show(SmuRisk, "NvTgpHold", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) { smu.Checked = false; return; }
+                _settings.SmuTuning = smu.Checked; SettingsStore.Save(_settings);
+                if (_settings.SmuTuning && _profile != null) { RyzenSmu.SetThermalLimit(_profile.CpuTemp, out _); RyzenSmu.SetUndervolt(_profile.CpuUv, out string d); _last = "SMU " + d; }
+                else if (!_settings.SmuTuning) { RyzenSmu.SetUndervolt(0, out string d); _last = "undervolt cleared (" + d + ")"; }
+                Refresh();
+            };
+            _profileMenu.DropDownItems.Add(smu); _smuTuningMenu = smu;
+
+            var gm = new ToolStripMenuItem("GPU display mode") { ToolTipText = GpuModeTip };
+            foreach (GpuDisplayMode gmode in new[] { GpuDisplayMode.Eco, GpuDisplayMode.Standard, GpuDisplayMode.Ultimate })
+            { var mm = gmode; gm.DropDownItems.Add(new ToolStripMenuItem(gmode.ToString(), null, (s, e) => DoGpuMode(mm)) { Tag = gmode }); }
+            gm.DropDownOpening += (s, e) => { var c = GpuMode.Current(out _); foreach (ToolStripMenuItem it in gm.DropDownItems) it.Checked = c.HasValue && (GpuDisplayMode)it.Tag == c.Value; };
+            _profileMenu.DropDownItems.Add(gm);
             m.Items.Add(_profileMenu);
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add(new ToolStripMenuItem("Run firmware / driver test", null, (s, e) => RunTest()));
@@ -391,7 +421,11 @@ namespace NvTgpHold
             // Stock means the EC's own ladder too: stop the hold and don't resume it on next launch.
             StopEcHold(); _ecNote = ""; _settings.EcLadder = false;
             if (_ecMenu != null && _ecMenu.Checked) _ecMenu.Checked = false;
-            _cpu = null; _settings.CpuProfile = ""; _profile = null; _settings.Profile = ""; _profileNote = ""; SettingsStore.Save(_settings); BoostMode.RestorePrior(); _cpuNote = "";
+            _cpu = null; _settings.CpuProfile = ""; _profile = null; _settings.Profile = ""; _profileNote = "";
+            // Stock also means no experimental GPU OC or SMU undervolt left applied.
+            if (_settings.GpuOc) { NvOc.SetClocks(0, 0, out _); _settings.GpuOc = false; if (_ocMenu != null) _ocMenu.Checked = false; }
+            if (_settings.SmuTuning && RyzenSmu.Supported) { RyzenSmu.SetUndervolt(0, out _); _settings.SmuTuning = false; if (_smuTuningMenu != null) _smuTuningMenu.Checked = false; }
+            SettingsStore.Save(_settings); BoostMode.RestorePrior(); _cpuNote = "";
             _sync = "";
             _last = "restored to stock 95+25 (" + gpu + ")";
             Balloon("MAX: " + rm + "\nCURRENT->95: " + rc + "\nBoost->25 (on): " + rb + "\nNVPCF additional->0: " + rp);
@@ -426,10 +460,45 @@ namespace NvTgpHold
             "Values come from your own G-Helper config. Close G-Helper (and turn its Auto apply off) so the two don't fight.\n" +
             "The CPU and GPU limits are re-asserted in the background like the holds; fan curves are re-sent on power/resume.";
 
-        private const string ExpansionTip =
-            "Not wired yet. CPU undervolt (Curve Optimizer) and GPU core/memory OC need an SMU / mVolt+-style primitive\n" +
-            "NvTgpHold doesn't have, and GPU-mode (Eco/Standard/Ultimate) switching needs a sign-out. These are planned as\n" +
-            "opt-in experimental expansions, like the EC ladder hold. The profile's undervolt value is stored but not applied.";
+        private const string OcTip =
+            "Experimental. While on, selecting a profile also applies its GPU core and memory clock offsets through NvAPI\n" +
+            "(the NvTgpHold-Manual profile is +100 core / +1000 memory). Turning it off sets the offset back to 0. Nothing is\n" +
+            "flashed; offsets reset on reboot. Too high an offset causes artifacts or a driver reset.";
+        private const string OcRisk =
+            "Experimental GPU overclock. Selecting a profile will apply its GPU core/memory clock offset through NvAPI.\n" +
+            "An unstable offset can cause screen artifacts, a driver reset, or a crash under load. Offsets reset on reboot\n" +
+            "and turning this off clears them. Only enable this if you accept that.";
+        private const string SmuTip =
+            "Experimental. While on, selecting a profile also sets its CPU temperature limit and Curve Optimizer undervolt\n" +
+            "through the Ryzen SMU (PawnIO). Applied on profile select and power/resume only, never in the fast re-assert.\n" +
+            "Turning it off sets the undervolt back to 0.";
+        private const string SmuRisk =
+            "Experimental CPU tuning over the Ryzen SMU. The SMU mailbox is shared with ASUS services and other tuning\n" +
+            "tools, so a write can collide. An over-aggressive Curve Optimizer undervolt causes instability or crashes that\n" +
+            "may only show under load. The undervolt resets on reboot and turning this off clears it. Enable only if you accept that.";
+        private const string GpuModeTip =
+            "Experimental. Switches the GPU display mode through ASUS ATK. Ultimate (MUX to dGPU) and leaving it need a\n" +
+            "reboot; Eco (iGPU only) and Standard re-initialise the display. Close your work before confirming a reboot.";
+
+        // Confirms, applies the GPU mode, and - for a MUX change - offers the reboot that makes it take effect.
+        private static void DoGpuMode(GpuDisplayMode target)
+        {
+            var cur = GpuMode.Current(out string curDetail);
+            if (!cur.HasValue) { Balloon("GPU mode unavailable: " + curDetail); return; }
+            if (cur.Value == target) { Balloon("GPU mode already " + target); return; }
+            string note = target == GpuDisplayMode.Ultimate || cur.Value == GpuDisplayMode.Ultimate
+                ? "This needs a reboot to take effect." : "The display will re-initialise (sign out or reboot for a clean switch).";
+            if (MessageBox.Show("Switch GPU mode from " + curDetail + " to " + target + "?\n\n" + note + "\nClose games and other GPU apps first.",
+                    "NvTgpHold", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
+            bool ok = GpuMode.Apply(target, out bool reboot, out string detail);
+            _last = "GPU mode: " + detail;
+            if (ok && reboot && MessageBox.Show(detail + "\n\nReboot now to apply it? Save your work first.",
+                    "NvTgpHold", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
+                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("shutdown", "/r /t 5 /c \"NvTgpHold GPU mode change\"") { UseShellExecute = false, CreateNoWindow = true }); }
+                catch (Exception ex) { _last = "reboot command failed: " + ex.Message; }
+            Balloon(_last);
+            Refresh();
+        }
 
         // Applies one full profile (or Off). Order mirrors G-Helper: ASUS mode first (EC loads its baseline), then the
         // fan curves, then CPU PPT (reusing the existing re-assert path via _cpu), then GPU temp / boost / power. The GPU
@@ -470,6 +539,15 @@ namespace NvTgpHold
                 notes.Append(", ").Append(bd).Append(", ").Append(pd);
             }
             else notes.Append(", GPU power/boost held by CURRENT hold");
+            // Experimental, opt-in, full apply only (never the fast re-assert): GPU clock offset (NVAPI) and CPU temp +
+            // undervolt (Ryzen SMU). Each is skipped unless its toggle is on; a failure is reported, not fatal.
+            if (full && _settings.GpuOc) { bool ok = NvOc.SetClocks(p.GpuCore, p.GpuMem, out string od); notes.Append(ok ? ", OC " + od : ", OC FAIL: " + od); }
+            if (full && _settings.SmuTuning && RyzenSmu.Supported)
+            {
+                RyzenSmu.SetThermalLimit(p.CpuTemp, out string td);
+                RyzenSmu.SetUndervolt(p.CpuUv, out string ud);
+                notes.Append(", ").Append(td).Append(", ").Append(ud);
+            }
             _profileNote = "profile " + p.Name + ": " + notes + " (" + why + ")";
             if (full) { _last = "profile " + p.Name + " applied"; if (why == "selected") Balloon(_profileNote); }
             Refresh();

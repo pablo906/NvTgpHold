@@ -60,6 +60,7 @@ namespace NvTgpHold
         private static int _autoTicks = 0;
         private static DateTime _lastGhCheck = DateTime.MinValue;
         private static bool _ghWarned = false;
+        private static bool _resettingDefaults;
 
         [STAThread]
         private static void Main()
@@ -81,10 +82,10 @@ namespace NvTgpHold
             _autoTimer = new System.Windows.Forms.Timer { Interval = _settings.IntervalS * 1000 };
             _autoTimer.Tick += (s, e) => AutoTick();
             if (_settings.Auto) _autoTimer.Start();
-            _ui = System.Threading.SynchronizationContext.Current;
+            _ui = System.Threading.SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
             if (_settings.EcLadder && EcLadder.Supported) StartEcHold();
-            SystemEvents.PowerModeChanged += (s, e) => { if (_holdTargetW > 0) Reassert("power " + e.Mode); if (_profile != null) ApplyProfile(_profile, "power " + e.Mode, full: true); else { ApplyCpu("power " + e.Mode); ReapplyFanProfile(); } ApplyOptimizedEco("power " + e.Mode); };
-            SystemEvents.SessionSwitch += (s, e) => { if (e.Reason != SessionSwitchReason.SessionUnlock) return; if (_holdTargetW > 0) Reassert("resume"); if (_profile != null) ApplyProfile(_profile, "resume", full: true); else { ApplyCpu("resume"); ReapplyFanProfile(); } ApplyOptimizedEco("resume"); };
+            SystemEvents.PowerModeChanged += (s, e) => _ui.Post(_ => ReapplyAfterPowerEvent("power " + e.Mode), null);
+            SystemEvents.SessionSwitch += (s, e) => { if (e.Reason == SessionSwitchReason.SessionUnlock) _ui.Post(_ => ReapplyAfterPowerEvent("resume"), null); };
             _fanProfile = FanProfiles.Find(_settings.FanProfile);
             var savedProfile = PowerProfiles.Find(_settings.Profile);
             if (savedProfile != null) { _profile = savedProfile; ApplyProfile(savedProfile, "startup", full: true); }
@@ -456,83 +457,123 @@ namespace NvTgpHold
 
         private static void DoRestore()
         {
+            if (_resettingDefaults || GpuGuard.Restarting) return;
             if (MessageBox.Show("Reset to Balanced + Optimized, with Balanced fan curves, no overclocks or undervolt, and all holds off?\n\nClose GPU applications first. The display may re-initialise; leaving Ultimate requires a reboot.",
                 "NvTgpHold", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
-            // Disable every old writer before restart's message pump can process power/resume callbacks.
-            _holdTargetW = 0; _holdTimer.Stop();
-            _settings.Auto = false; _autoTimer.Stop();
-            _profile = null; _cpu = null; _fanProfile = null;
-            _settings.Profile = ""; _settings.CpuProfile = ""; _settings.FanProfile = "";
-            _settings.GpuOptimized = false; _settings.GpuOc = false; _settings.SmuTuning = false;
-            _settings.EcLadder = false; _settings.EfficientBoost = false;
-            _priorPower = -1; _autoNote = ""; _cpuNote = ""; _profileNote = ""; _sync = "";
-            StopEcHold(); _ecNote = "";
-            SettingsStore.Save(_settings);
-            if (_autoMenu != null) _autoMenu.Checked = false;
-            if (_ecMenu != null) _ecMenu.Checked = false;
-            if (_ocMenu != null) _ocMenu.Checked = false;
-            if (_smuTuningMenu != null) _smuTuningMenu.Checked = false;
-            if (_efficientBoostMenu != null) _efficientBoostMenu.Checked = false;
-            // A cancelled EC slot can still write until it finishes. Drain it before setting mode/fans.
+            _resettingDefaults = true;
             try
             {
-                if (_ecTask != null && !_ecTask.Wait(2500))
-                { _last = "holds disabled; EC worker still stopping - retry Reset to defaults"; Balloon(_last); Refresh(); return; }
+                // Disable every old writer before restart's message pump can process power/resume callbacks.
+                _holdTargetW = 0; _holdTimer.Stop();
+                _settings.Auto = false; _autoTimer.Stop();
+                _profile = null; _cpu = null; _fanProfile = null;
+                _settings.Profile = ""; _settings.CpuProfile = ""; _settings.FanProfile = "";
+                _settings.GpuOptimized = false; _settings.GpuOc = false; _settings.SmuTuning = false;
+                _settings.EcLadder = false; _settings.EfficientBoost = false;
+                _priorPower = -1; _autoNote = ""; _cpuNote = ""; _profileNote = ""; _sync = "";
+                StopEcHold(); _ecNote = "";
+                SettingsStore.Save(_settings);
+                if (_autoMenu != null) _autoMenu.Checked = false;
+                if (_ecMenu != null) _ecMenu.Checked = false;
+                if (_ocMenu != null) _ocMenu.Checked = false;
+                if (_smuTuningMenu != null) _smuTuningMenu.Checked = false;
+                if (_efficientBoostMenu != null) _efficientBoostMenu.Checked = false;
+                // A cancelled EC slot can still write until it finishes. Drain it before setting mode/fans.
+                try
+                {
+                    if (_ecTask != null && !_ecTask.Wait(2500))
+                    { _last = "holds disabled; EC worker still stopping - retry Reset to defaults"; Balloon(_last); Refresh(); return; }
+                }
+                catch (AggregateException) { /* A faulted worker is finished and cannot issue another write. */ }
+                BoostMode.RestorePrior();
+                RegMax.RemoveMax(out string rm, out bool removed);
+                _maxTargetW = 0;
+                // Reload the stock ceiling first, then apply the Balanced settings after any device restart.
+                string gpu = removed ? "reboot to drop MAX" : "MAX unchanged";
+                if (removed && AskRestartGpu("Override removed.\n\nRestart the NVIDIA GPU now to restore the stock MAX without rebooting?"))
+                {
+                    bool r = RestartGpu(out double max, out string rd);
+                    gpu = r ? "GPU restarted, MAX " + Watts(max) + " W" : "GPU restart failed: " + rd + " - reboot to drop MAX";
+                    rm += "\n" + gpu;
+                }
+                // Optimized's hardware action first enables Standard/hybrid. Do not apply its battery Eco policy
+                // until all NVIDIA clock resets finish: starting in Eco otherwise leaves no GPU to reset.
+                bool modeApplied = GpuMode.Apply(GpuDisplayMode.Optimized, out bool reboot, out string modeDetail);
+                // Enabling hybrid is asynchronous. Wait for read-only driver access before issuing resets, rather
+                // than racing device enumeration and predictably rejecting the first writes after leaving Eco.
+                bool gpuReady = WaitForGpuReady(out string readyDetail);
+                string rc = readyDetail;
+                bool currentReset = gpuReady && ApplyCurrent(StockCurrentW, out rc); // one-time reset, never starts a hold
+                var balanced = PowerProfiles.Find("Balanced");
+                bool uvCleared = !RyzenSmu.Supported; string uvReset = "SMU unavailable; reboot to clear prior tuning";
+                if (RyzenSmu.Supported)
+                {
+                    uvCleared = RyzenSmu.SetUndervolt(0, out uvReset);
+                    bool thermalReset = RyzenSmu.SetThermalLimit(balanced.CpuTemp, out string thermalDetail);
+                    uvCleared &= thermalReset; uvReset += ", " + thermalDetail;
+                }
+                string ocReset = readyDetail;
+                bool ocCleared = gpuReady && ApplyGpuClocks(0, 0, out ocReset);
+                // Video offsets can survive an application relaunch too; do not trust the in-memory selection.
+                string videoReset = readyDetail;
+                bool videoCleared = gpuReady && NvOc.SetVideoClock(0, out videoReset);
+                if (videoCleared) _gpuVideo = 0;
+                // Driver offsets survive exiting/crashing this process. Restore must not trust session-local
+                // NeedsReset: after relaunch it is false even if the previous instance left an offset active.
+                string sysXbarReset = readyDetail;
+                bool sysXbarCleared = gpuReady && NvSysXbar.SetLinkedOffset(0, out sysXbarReset);
+                _gpuSysXbar = sysXbarCleared ? 0 : (int?)null;
+                _profile = balanced;
+                bool profileApplied = ApplyProfile(balanced, "reset defaults", full: true);
+                if (profileApplied) _settings.Profile = balanced.Name;
+                else { _profile = null; _cpu = null; } // do not persist/reapply a failed reset profile on startup
+                // Clear clocks before Optimized can turn off the NVIDIA GPU on battery.
+                bool ecoApplied = true; string ecoDetail = "";
+                if (modeApplied && !reboot) { ecoApplied = ApplyOptimizedEco("reset defaults", requested: true); ecoDetail = _last; }
+                // An accepted MUX request is deliberately saved as a requested policy pending the offered reboot.
+                // This differs from a rejected immediate Eco write, which must not persist Optimized as enabled.
+                _settings.GpuOptimized = modeApplied && (reboot || ecoApplied);
+                SettingsStore.Save(_settings);
+                _last = "reset requested: Balanced + Optimized; holds off (" + gpu + ")";
+                if (!currentReset) _last += " | CURRENT reset FAIL: " + rc;
+                if (!profileApplied) _last += " | Balanced apply FAIL: " + _profileNote;
+                if (!modeApplied || !ecoApplied) _last += " | Optimized FAIL: " + (!modeApplied ? modeDetail : ecoDetail);
+                if (reboot) _last += " | reboot required for Optimized";
+                if (!uvCleared || !RyzenSmu.Supported) _last += " | " + uvReset;
+                if (!ocCleared) _last += " | GPU OC clear FAIL: " + ocReset;
+                if (!videoCleared) _last += " | video OC clear FAIL: " + videoReset;
+                if (!sysXbarCleared) _last += " | SYS/XBAR clear FAIL: " + sysXbarReset;
+                Balloon(_last + "\nMAX: " + rm);
+                Refresh();
+                if (modeApplied && reboot && MessageBox.Show("Optimized mode needs a reboot. Reboot now? Save your work first.",
+                    "NvTgpHold", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
+                    try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("shutdown", "/r /t 5 /c \"NvTgpHold reset to Optimized\"") { UseShellExecute = false, CreateNoWindow = true }); }
+                    catch (Exception ex) { _last += " | reboot command failed: " + ex.Message; Refresh(); }
             }
-            catch (AggregateException) { /* A faulted worker is finished and cannot issue another write. */ }
-            BoostMode.RestorePrior();
-            RegMax.RemoveMax(out string rm, out bool removed);
-            _maxTargetW = 0;
-            // Reload the stock ceiling first, then apply the Balanced settings after any device restart.
-            string gpu = removed ? "reboot to drop MAX" : "MAX unchanged";
-            if (removed && AskRestartGpu("Override removed.\n\nRestart the NVIDIA GPU now to restore the stock MAX without rebooting?"))
+            finally { _resettingDefaults = false; }
+        }
+
+        private static void ReapplyAfterPowerEvent(string why)
+        {
+            // SystemEvents may originate off the UI thread. The handlers post here so a reset cannot race an
+            // already-running old profile write, and restart's nested message pump cannot issue Eco/CPU/fan writes.
+            if (_resettingDefaults || GpuGuard.Restarting) return;
+            if (_holdTargetW > 0) Reassert(why);
+            if (_profile != null) ApplyProfile(_profile, why, full: true);
+            else { ApplyCpu(why); ReapplyFanProfile(); }
+            ApplyOptimizedEco(why);
+        }
+
+        private static bool WaitForGpuReady(out string detail)
+        {
+            var wait = System.Diagnostics.Stopwatch.StartNew();
+            do
             {
-                bool r = RestartGpu(out double max, out string rd);
-                gpu = r ? "GPU restarted, MAX " + Watts(max) + " W" : "GPU restart failed: " + rd + " - reboot to drop MAX";
-                rm += "\n" + gpu;
-            }
-            // Optimized's hardware action first enables Standard/hybrid. Do not apply its battery Eco policy
-            // until all NVIDIA clock resets finish: starting in Eco otherwise leaves no GPU to reset.
-            bool modeApplied = GpuMode.Apply(GpuDisplayMode.Optimized, out bool reboot, out string modeDetail);
-            bool currentReset = ApplyCurrent(StockCurrentW, out string rc); // one-time reset, never starts a hold
-            var balanced = PowerProfiles.Find("Balanced");
-            bool uvCleared = !RyzenSmu.Supported; string uvReset = "SMU unavailable; reboot to clear prior tuning";
-            if (RyzenSmu.Supported)
-            {
-                uvCleared = RyzenSmu.SetUndervolt(0, out uvReset);
-                bool thermalReset = RyzenSmu.SetThermalLimit(balanced.CpuTemp, out string thermalDetail);
-                uvCleared &= thermalReset; uvReset += ", " + thermalDetail;
-            }
-            bool ocCleared = ApplyGpuClocks(0, 0, out string ocReset);
-            // Video offsets can survive an application relaunch too; do not trust the in-memory selection.
-            bool videoCleared = NvOc.SetVideoClock(0, out string videoReset);
-            if (videoCleared) _gpuVideo = 0;
-            // Driver offsets survive exiting/crashing this process. Restore must not trust session-local
-            // NeedsReset: after relaunch it is false even if the previous instance left an offset active.
-            bool sysXbarCleared = NvSysXbar.SetLinkedOffset(0, out string sysXbarReset);
-            _gpuSysXbar = sysXbarCleared ? 0 : (int?)null;
-            _profile = balanced; _settings.Profile = balanced.Name;
-            bool profileApplied = ApplyProfile(balanced, "reset defaults", full: true);
-            // Clear clocks before Optimized can turn off the NVIDIA GPU on battery.
-            if (modeApplied) _settings.GpuOptimized = true;
-            bool ecoApplied = true; string ecoDetail = "";
-            if (modeApplied && !reboot) { ecoApplied = ApplyOptimizedEco("reset defaults"); ecoDetail = _last; }
-            SettingsStore.Save(_settings);
-            _last = "reset requested: Balanced + Optimized; holds off (" + gpu + ")";
-            if (!currentReset) _last += " | CURRENT reset FAIL: " + rc;
-            if (!profileApplied) _last += " | Balanced apply FAIL: " + _profileNote;
-            if (!modeApplied || !ecoApplied) _last += " | Optimized FAIL: " + (!modeApplied ? modeDetail : ecoDetail);
-            if (reboot) _last += " | reboot required for Optimized";
-            if (!uvCleared || !RyzenSmu.Supported) _last += " | " + uvReset;
-            if (!ocCleared) _last += " | GPU OC clear FAIL: " + ocReset;
-            if (!videoCleared) _last += " | video OC clear FAIL: " + videoReset;
-            if (!sysXbarCleared) _last += " | SYS/XBAR clear FAIL: " + sysXbarReset;
-            Balloon(_last + "\nMAX: " + rm);
-            Refresh();
-            if (modeApplied && reboot && MessageBox.Show("Optimized mode needs a reboot. Reboot now? Save your work first.",
-                "NvTgpHold", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
-                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("shutdown", "/r /t 5 /c \"NvTgpHold reset to Optimized\"") { UseShellExecute = false, CreateNoWindow = true }); }
-                catch (Exception ex) { _last += " | reboot command failed: " + ex.Message; Refresh(); }
+                if (NvOc.GetClocks(out _, out _, out detail)) return true;
+                System.Threading.Thread.Sleep(100);
+            } while (wait.ElapsedMilliseconds < 5000);
+            detail = "NVIDIA GPU not ready for reset: " + detail;
+            return false;
         }
 
         // Selecting a profile applies it once; with Auto re-assert on it is re-applied every tick. Off stops writing:
@@ -634,9 +675,9 @@ namespace NvTgpHold
         }
 
         // GPU "Optimized" policy: dGPU on (Standard) while on AC, Eco (iGPU only) on battery.
-        private static bool ApplyOptimizedEco(string why)
+        private static bool ApplyOptimizedEco(string why, bool requested = false)
         {
-            if (!_settings.GpuOptimized) return false;
+            if ((!_settings.GpuOptimized && !requested) || GpuGuard.Restarting) return false;
             bool onBattery = SystemInformation.PowerStatus.PowerLineStatus == PowerLineStatus.Offline;
             bool ok = AtkAcpi.SetGpuEco(onBattery ? 1 : 0, out string d);
             _last = "Optimized: " + (ok ? (onBattery ? "Eco (battery)" : "Standard (AC)") : "FAIL") + " (" + why + ", " + d + ")";
@@ -733,11 +774,11 @@ namespace NvTgpHold
             else notes.Append(", GPU power/boost held by CURRENT hold");
             // Experimental, opt-in, full apply only (never the fast re-assert): GPU clock offset (NVAPI) and CPU temp +
             // undervolt (Ryzen SMU). Each is skipped unless its toggle is on; a failure is reported, not fatal.
-            if (full && _settings.GpuOc) { bool ok = ApplyGpuClocks(p.GpuCore, p.GpuMem, out string od); notes.Append(ok ? ", OC " + od : ", OC FAIL: " + od); }
+            if (full && _settings.GpuOc) { bool ok = ApplyGpuClocks(p.GpuCore, p.GpuMem, out string od); success &= ok; notes.Append(ok ? ", OC " + od : ", OC FAIL: " + od); }
             if (full && _settings.SmuTuning && RyzenSmu.Supported)
             {
-                RyzenSmu.SetThermalLimit(p.CpuTemp, out string td);
-                RyzenSmu.SetUndervolt(p.CpuUv, out string ud);
+                success &= RyzenSmu.SetThermalLimit(p.CpuTemp, out string td);
+                success &= RyzenSmu.SetUndervolt(p.CpuUv, out string ud);
                 notes.Append(", ").Append(td).Append(", ").Append(ud);
             }
             _profileNote = "profile " + p.Name + ": " + notes + " (" + why + ")";

@@ -51,7 +51,9 @@ namespace NvTgpHold
         private static Settings _settings = new Settings();
         private static CpuProfile _cpu;                     // active CPU profile, null = not asserting CPU limits
         private static PowerProfile _profile;               // active full power profile (replaces G-Helper), null = off
-        private static ToolStripMenuItem _profileMenu, _ocMenu, _smuTuningMenu;
+        private static ToolStripMenuItem _profileMenu, _ocMenu, _smuTuningMenu, _fanMenu, _gpuCoreMenu, _gpuMemMenu;
+        private static FanProfile _fanProfile;              // active standalone fan override, null = follow the power profile
+        private static int _gpuCore, _gpuMem;               // manually-picked GPU OC offsets (MHz)
         private static string _profileNote = "";
         private static string _cpuNote = "", _autoNote = "", _ghelper = "";
         private static int _autoTicks = 0;
@@ -99,6 +101,13 @@ namespace NvTgpHold
             _profileMenu = new ToolStripMenuItem("Power profile (replaces G-Helper)") { ToolTipText = ProfileTip };
             _profileMenu.DropDownItems.Add(new ToolStripMenuItem("Off (stop managing)", null, (s, e) => SetProfile(null)) { Tag = "" });
             foreach (var p in PowerProfiles.Presets) { var pp = p; _profileMenu.DropDownItems.Add(new ToolStripMenuItem(p.Name, null, (s, e) => SetProfile(pp)) { Tag = p.Name, ToolTipText = p.Summary }); }
+
+            // Standalone fan-curve override, separate from the power profile (Silent/Balanced/Turbo + Max cooling).
+            _fanMenu = new ToolStripMenuItem("Fan profile") { ToolTipText = FanTip };
+            _fanMenu.DropDownItems.Add(new ToolStripMenuItem("Follow power profile", null, (s, e) => SetFanProfile(null)) { Tag = "" });
+            foreach (var f in FanProfiles.Presets) { var ff = f; _fanMenu.DropDownItems.Add(new ToolStripMenuItem(f.Name, null, (s, e) => SetFanProfile(ff)) { Tag = f.Name }); }
+            _profileMenu.DropDownItems.Add(_fanMenu);
+
             _profileMenu.DropDownItems.Add(new ToolStripSeparator());
             _profileMenu.DropDownItems.Add(new ToolStripMenuItem("Experimental expansions") { Enabled = false });
 
@@ -125,10 +134,30 @@ namespace NvTgpHold
             };
             _profileMenu.DropDownItems.Add(smu); _smuTuningMenu = smu;
 
+            // GPU core/mem overclock picker (experimental): core in 25 MHz steps 100-300, memory in Jose's steps. NvAPI.
+            var ocPick = new ToolStripMenuItem("GPU overclock (core / memory)") { ToolTipText = OcPickTip };
+            var coreMenu = new ToolStripMenuItem("Core offset");
+            coreMenu.DropDownItems.Add(new ToolStripMenuItem("0 (off)", null, (s, e) => SetGpuCore(0)) { Tag = 0 });
+            for (int mhz = 100; mhz <= 300; mhz += 25) { int mm = mhz; coreMenu.DropDownItems.Add(new ToolStripMenuItem("+" + mhz + " MHz", null, (s, e) => SetGpuCore(mm)) { Tag = mhz }); }
+            ocPick.DropDownItems.Add(coreMenu); _gpuCoreMenu = coreMenu;
+            var memMenu = new ToolStripMenuItem("Memory offset");
+            memMenu.DropDownItems.Add(new ToolStripMenuItem("0 (off)", null, (s, e) => SetGpuMem(0)) { Tag = 0 });
+            foreach (int mhz in new[] { 300, 500, 750, 1000, 1500, 2000, 2500, 3000 }) { int mm = mhz; memMenu.DropDownItems.Add(new ToolStripMenuItem("+" + mhz + " MHz", null, (s, e) => SetGpuMem(mm)) { Tag = mhz }); }
+            ocPick.DropDownItems.Add(memMenu); _gpuMemMenu = memMenu;
+            _profileMenu.DropDownItems.Add(ocPick);
+
             var gm = new ToolStripMenuItem("GPU display mode") { ToolTipText = GpuModeTip };
-            foreach (GpuDisplayMode gmode in new[] { GpuDisplayMode.Eco, GpuDisplayMode.Standard, GpuDisplayMode.Ultimate })
+            foreach (GpuDisplayMode gmode in new[] { GpuDisplayMode.Eco, GpuDisplayMode.Standard, GpuDisplayMode.Ultimate, GpuDisplayMode.Optimized })
             { var mm = gmode; gm.DropDownItems.Add(new ToolStripMenuItem(gmode.ToString(), null, (s, e) => DoGpuMode(mm)) { Tag = gmode }); }
-            gm.DropDownOpening += (s, e) => { var c = GpuMode.Current(out _); foreach (ToolStripMenuItem it in gm.DropDownItems) it.Checked = c.HasValue && (GpuDisplayMode)it.Tag == c.Value; };
+            gm.DropDownOpening += (s, e) =>
+            {
+                var c = GpuMode.Current(out _);
+                foreach (ToolStripMenuItem it in gm.DropDownItems)
+                {
+                    var tag = (GpuDisplayMode)it.Tag;
+                    it.Checked = _settings.GpuOptimized ? tag == GpuDisplayMode.Optimized : (c.HasValue && tag == c.Value);
+                }
+            };
             _profileMenu.DropDownItems.Add(gm);
             m.Items.Add(_profileMenu);
             m.Items.Add(new ToolStripSeparator());
@@ -477,6 +506,48 @@ namespace NvTgpHold
             "(SPL/SPPT/FPPT), GPU added power + Dynamic Boost + temp target, and both fan curves - all through ASUS ATK.\n" +
             "Values come from your own G-Helper config. Close G-Helper (and turn its Auto apply off) so the two don't fight.\n" +
             "The CPU and GPU limits are re-asserted in the background like the holds; fan curves are re-sent on power/resume.";
+
+        private const string FanTip =
+            "A standalone fan curve that overrides the power profile's fans. Silent/Balanced/Turbo are the G-Helper curves;\n" +
+            "Max cooling ramps linearly to 50 C / 50%, then up to 100% at 70 C and flat above. 'Follow power profile' clears\n" +
+            "the override. Applied through ASUS ATK and re-sent on power/resume.";
+        private const string OcPickTip =
+            "Experimental GPU overclock through NvAPI. Pick a core (25 MHz steps) and memory offset; they apply immediately\n" +
+            "and reset on reboot. An unstable offset causes artifacts or a driver reset. Not persisted across restarts.";
+
+        // Standalone fan-curve override. null = follow the active power profile's fans.
+        private static void SetFanProfile(FanProfile f)
+        {
+            _fanProfile = f;
+            _settings.FanProfile = f?.Name ?? "";
+            SettingsStore.Save(_settings);
+            if (f != null) { AtkAcpi.SetFanCurve(false, f.Cpu, out _); AtkAcpi.SetFanCurve(true, f.Gpu, out _); _last = "fan profile: " + f.Name; }
+            else if (_profile != null) { AtkAcpi.SetFanCurve(false, _profile.CpuFan, out _); AtkAcpi.SetFanCurve(true, _profile.GpuFan, out _); _last = "fan: follow " + _profile.Name; }
+            else _last = "fan: follow power profile";
+            Refresh();
+        }
+
+        // Re-applies the standalone fan override if one is set (used on power/resume). Does nothing when following the profile.
+        private static void ReapplyFanProfile()
+        {
+            if (_fanProfile == null) return;
+            AtkAcpi.SetFanCurve(false, _fanProfile.Cpu, out _); AtkAcpi.SetFanCurve(true, _fanProfile.Gpu, out _);
+        }
+
+        private static bool _ocConsented;
+        private static bool ConsentOc() { if (_ocConsented) return true; if (MessageBox.Show(OcRisk, "NvTgpHold", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK) { _ocConsented = true; return true; } return false; }
+        private static void SetGpuCore(int mhz) { if (mhz > 0 && !ConsentOc()) return; _gpuCore = mhz; ApplyManualOc(); }
+        private static void SetGpuMem(int mhz) { if (mhz > 0 && !ConsentOc()) return; _gpuMem = mhz; ApplyManualOc(); }
+        private static void ApplyManualOc() { bool ok = NvOc.SetClocks(_gpuCore, _gpuMem, out string d); _last = "GPU OC " + (ok ? d : "FAIL: " + d); Refresh(); }
+
+        // GPU "Optimized" policy: dGPU on (Standard) while on AC, Eco (iGPU only) on battery.
+        private static void ApplyOptimizedEco(string why)
+        {
+            if (!_settings.GpuOptimized) return;
+            bool onBattery = SystemInformation.PowerStatus.PowerLineStatus == PowerLineStatus.Offline;
+            AtkAcpi.SetGpuEco(onBattery ? 1 : 0, out string d);
+            _last = "Optimized: " + (onBattery ? "Eco (battery)" : "Standard (AC)") + " (" + why + ", " + d + ")";
+        }
 
         private const string OcTip =
             "Experimental. While on, selecting a profile also applies its GPU core and memory clock offsets through NvAPI\n" +

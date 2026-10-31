@@ -96,13 +96,52 @@ namespace NvTgpHold.Tests
         [Fact]
         public void Settings_round_trip_the_profile_and_experimental_flags()
         {
-            var back = Settings.Parse(new Settings { Profile = "Turbo", GpuOc = true, SmuTuning = true }.Serialize());
+            var back = Settings.Parse(new Settings { Profile = "Turbo", GpuOc = true, SmuTuning = true, FanProfile = "Max cooling", GpuOptimized = true }.Serialize());
             Assert.Equal("Turbo", back.Profile);
             Assert.True(back.GpuOc);
             Assert.True(back.SmuTuning);
-            Assert.Equal("", Settings.Parse(new[] { "profile=bogus" }).Profile);   // unknown name rejected
+            Assert.Equal("Max cooling", back.FanProfile);
+            Assert.True(back.GpuOptimized);
+            Assert.Equal("", Settings.Parse(new[] { "profile=bogus" }).Profile);        // unknown name rejected
+            Assert.Equal("", Settings.Parse(new[] { "fanprofile=bogus" }).FanProfile);  // unknown fan name rejected
             var def = Settings.Parse(new string[0]);
-            Assert.False(def.GpuOc); Assert.False(def.SmuTuning);                   // experimental off by default
+            Assert.False(def.GpuOc); Assert.False(def.SmuTuning); Assert.False(def.GpuOptimized);   // experimental off by default
+        }
+
+        [Fact]
+        public void Fan_profiles_cover_the_four_options_with_valid_curves()
+        {
+            Assert.Equal(new[] { "Silent", "Balanced", "Turbo", "Max cooling" }, System.Array.ConvertAll(FanProfiles.Presets, f => f.Name));
+            foreach (var f in FanProfiles.Presets)
+                foreach (var curve in new[] { f.Cpu, f.Gpu })
+                {
+                    Assert.Equal(16, curve.Length);
+                    for (int i = 1; i < 8; i++) Assert.True(curve[i] >= curve[i - 1]);        // temps non-decreasing
+                    for (int i = 8; i < 16; i++) Assert.InRange(curve[i], 0, 100);            // percents 0-100
+                }
+            Assert.NotNull(FanProfiles.Find("max cooling"));
+            Assert.Null(FanProfiles.Find("nope"));
+        }
+
+        [Fact]
+        public void Max_cooling_hits_50pct_at_50C_and_100pct_by_70C()
+        {
+            var mc = FanProfiles.Find("Max cooling");
+            // temps 30/40/50/60/70/80/90/100, duties 30/40/50/75/100/100/100/100
+            Assert.Equal(50, mc.Cpu[8 + 2]);    // 50 C -> 50%
+            Assert.Equal(100, mc.Cpu[8 + 4]);   // 70 C -> 100%
+            Assert.Equal(100, mc.Cpu[8 + 7]);   // 100 C flat at 100%
+        }
+
+        [Fact]
+        public void Manual_profile_uses_max_cooling_and_gpu_85()
+        {
+            var m = PowerProfiles.Find("NvTgpHold-Manual");
+            Assert.Equal(85, m.GpuTemp);                         // Jose's spec: GPU max 85 C
+            Assert.Equal(90, m.CpuTemp);                         // CPU max 90 C
+            Assert.Equal(-25, m.CpuUv);                          // -25 CO
+            Assert.Equal(50, m.CpuFan[8 + 2]);                   // max-cooling curve (50 C -> 50%)
+            Assert.Equal(100, m.GpuFan[8 + 4]);                  // 70 C -> 100%
         }
     }
 }

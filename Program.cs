@@ -82,11 +82,14 @@ namespace NvTgpHold
             if (_settings.Auto) _autoTimer.Start();
             _ui = System.Threading.SynchronizationContext.Current;
             if (_settings.EcLadder && EcLadder.Supported) StartEcHold();
-            SystemEvents.PowerModeChanged += (s, e) => { if (_holdTargetW > 0) Reassert("power " + e.Mode); if (_profile != null) ApplyProfile(_profile, "power " + e.Mode, full: true); else ApplyCpu("power " + e.Mode); };
-            SystemEvents.SessionSwitch += (s, e) => { if (e.Reason != SessionSwitchReason.SessionUnlock) return; if (_holdTargetW > 0) Reassert("resume"); if (_profile != null) ApplyProfile(_profile, "resume", full: true); else ApplyCpu("resume"); };
+            SystemEvents.PowerModeChanged += (s, e) => { if (_holdTargetW > 0) Reassert("power " + e.Mode); if (_profile != null) ApplyProfile(_profile, "power " + e.Mode, full: true); else { ApplyCpu("power " + e.Mode); ReapplyFanProfile(); } ApplyOptimizedEco("power " + e.Mode); };
+            SystemEvents.SessionSwitch += (s, e) => { if (e.Reason != SessionSwitchReason.SessionUnlock) return; if (_holdTargetW > 0) Reassert("resume"); if (_profile != null) ApplyProfile(_profile, "resume", full: true); else { ApplyCpu("resume"); ReapplyFanProfile(); } ApplyOptimizedEco("resume"); };
+            _fanProfile = FanProfiles.Find(_settings.FanProfile);
             var savedProfile = PowerProfiles.Find(_settings.Profile);
             if (savedProfile != null) { _profile = savedProfile; ApplyProfile(savedProfile, "startup", full: true); }
             else if (CpuInfo.StrixPoint && CpuProfiles.Find(_settings.CpuProfile) != null) SetCpuProfile(CpuProfiles.Find(_settings.CpuProfile));
+            if (_profile == null && _fanProfile != null) ReapplyFanProfile();   // fan override with no power profile active
+            ApplyOptimizedEco("startup");
             Refresh();
             Application.ApplicationExit += (s, e) => { RestorePrior("exit"); BoostMode.RestorePrior(); StopEcHold(exiting: true); RyzenSmu.Close(); if (_tray != null) _tray.Visible = false; };
             Application.Run();
@@ -466,6 +469,8 @@ namespace NvTgpHold
             // Stock also means no experimental GPU OC or SMU undervolt left applied.
             if (_settings.GpuOc) { NvOc.SetClocks(0, 0, out _); _settings.GpuOc = false; if (_ocMenu != null) _ocMenu.Checked = false; }
             if (_settings.SmuTuning && RyzenSmu.Supported) { RyzenSmu.SetUndervolt(0, out _); _settings.SmuTuning = false; if (_smuTuningMenu != null) _smuTuningMenu.Checked = false; }
+            if (_gpuCore != 0 || _gpuMem != 0) { _gpuCore = 0; _gpuMem = 0; NvOc.SetClocks(0, 0, out _); }
+            _fanProfile = null; _settings.FanProfile = ""; _settings.GpuOptimized = false;
             SettingsStore.Save(_settings); BoostMode.RestorePrior(); _cpuNote = "";
             _sync = "";
             _last = "restored to stock 95+25 (" + gpu + ")";
@@ -574,13 +579,17 @@ namespace NvTgpHold
         {
             var cur = GpuMode.Current(out string curDetail);
             if (!cur.HasValue) { Balloon("GPU mode unavailable: " + curDetail); return; }
-            if (cur.Value == target) { Balloon("GPU mode already " + target); return; }
+            bool optimized = target == GpuDisplayMode.Optimized;
+            if (!optimized && cur.Value == target && !_settings.GpuOptimized) { Balloon("GPU mode already " + target); return; }
             string note = target == GpuDisplayMode.Ultimate || cur.Value == GpuDisplayMode.Ultimate
-                ? "This needs a reboot to take effect." : "The display will re-initialise (sign out or reboot for a clean switch).";
-            if (MessageBox.Show("Switch GPU mode from " + curDetail + " to " + target + "?\n\n" + note + "\nClose games and other GPU apps first.",
+                ? "This needs a reboot to take effect." : optimized ? "dGPU on AC, Eco (iGPU only) on battery; switches automatically."
+                : "The display will re-initialise (sign out or reboot for a clean switch).";
+            if (MessageBox.Show("Set GPU mode to " + target + "?\nCurrent: " + curDetail + (_settings.GpuOptimized ? " (Optimized policy on)" : "") + ".\n\n" + note + "\nClose games and other GPU apps first.",
                     "NvTgpHold", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
             bool ok = GpuMode.Apply(target, out bool reboot, out string detail);
-            _last = "GPU mode: " + detail;
+            _settings.GpuOptimized = optimized; SettingsStore.Save(_settings);
+            if (ok && optimized) { ApplyOptimizedEco("selected"); detail += " | " + _last; }
+            else _last = "GPU mode: " + detail;
             if (ok && reboot && MessageBox.Show(detail + "\n\nReboot now to apply it? Save your work first.",
                     "NvTgpHold", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
                 try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("shutdown", "/r /t 5 /c \"NvTgpHold GPU mode change\"") { UseShellExecute = false, CreateNoWindow = true }); }
@@ -614,9 +623,11 @@ namespace NvTgpHold
             {
                 AtkAcpi.SetMode(p.AsusMode, out string md); notes.Append(md);
                 System.Threading.Thread.Sleep(400);                 // let the mode's EC baseline settle before overriding it
-                bool cf = AtkAcpi.SetFanCurve(false, p.CpuFan, out string cfd);
-                bool gf = AtkAcpi.SetFanCurve(true, p.GpuFan, out string gfd);
-                notes.Append(", ").Append(cf ? cfd : "cpuFan FAIL: " + cfd).Append(", ").Append(gf ? gfd : "gpuFan FAIL: " + gfd);
+                // A standalone fan override wins over the profile's own fan curves.
+                byte[] cpuFan = _fanProfile?.Cpu ?? p.CpuFan, gpuFan = _fanProfile?.Gpu ?? p.GpuFan;
+                bool cf = AtkAcpi.SetFanCurve(false, cpuFan, out string cfd);
+                bool gf = AtkAcpi.SetFanCurve(true, gpuFan, out string gfd);
+                notes.Append(_fanProfile != null ? ", fan[" + _fanProfile.Name + "]" : "").Append(", ").Append(cf ? cfd : "cpuFan FAIL: " + cfd).Append(", ").Append(gf ? gfd : "gpuFan FAIL: " + gfd);
                 _cpu = p.Cpu; _settings.CpuProfile = ""; SettingsStore.Save(_settings);   // profile drives PPT; clear the standalone CPU preset
                 ApplyCpu("profile");                                // SPL/SPPT/FPPT + (optional) efficient-boost, re-asserted by Auto
             }
@@ -782,6 +793,9 @@ namespace NvTgpHold
             string extra = (_profile != null ? "  |  [" + _profile.Name + "]" : "") + (_profileNote.Length > 0 && _profile == null ? "  |  " + _profileNote : "") + (_cpuNote.Length > 0 ? "  |  " + _cpuNote : "") + (_ecNote.Length > 0 ? "  |  " + _ecNote : "") + (_settings.Auto ? "  |  every " + _settings.IntervalS + " s" + (_autoNote.Length > 0 ? ", " + _autoNote : "") : "") + (_ghelper.Length > 0 ? "  |  " + _ghelper : "");
             if (_status != null) _status.Text = hold + "  |  enf " + enf + " / max " + mx + " W  |  NVPCF " + nv + " W" + (_sync.Length > 0 ? " (" + _sync + ")" : "") + "  |  " + _last + extra;
             if (_profileMenu != null) foreach (ToolStripItem it in _profileMenu.DropDownItems) if (it is ToolStripMenuItem mi && mi.Tag is string tag) mi.Checked = tag == (_profile?.Name ?? "");
+            if (_fanMenu != null) foreach (ToolStripMenuItem it in _fanMenu.DropDownItems) if (it.Tag is string ft) it.Checked = ft == (_fanProfile?.Name ?? "");
+            if (_gpuCoreMenu != null) foreach (ToolStripMenuItem it in _gpuCoreMenu.DropDownItems) it.Checked = it.Tag is int c && c == _gpuCore;
+            if (_gpuMemMenu != null) foreach (ToolStripMenuItem it in _gpuMemMenu.DropDownItems) it.Checked = it.Tag is int me && me == _gpuMem;
             if (_intervalMenu != null) foreach (ToolStripMenuItem it in _intervalMenu.DropDownItems) it.Checked = (int)it.Tag == _settings.IntervalS;
             if (_cpuMenu != null) foreach (ToolStripItem it in _cpuMenu.DropDownItems) if (it is ToolStripMenuItem mi && !mi.CheckOnClick) mi.Checked = (mi.Tag as string) == (_cpu?.Name) || (mi.Tag == null && _cpu == null);
             if (_holdMenu != null) foreach (ToolStripMenuItem it in _holdMenu.DropDownItems) it.Checked = (_holdTargetW > 0 && it.Text == _holdTargetW + " W");

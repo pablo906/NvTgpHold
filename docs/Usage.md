@@ -33,7 +33,13 @@ Values come from the owner's own G-Helper config.
 | Silent | Silent | 28 / 45 / 65 W | +0 W / 5 W / 85 °C |
 | Balanced | Balanced | 35 / 50 / 65 W | +15 W / 25 W / 85 °C |
 | Turbo | Turbo | 35 / 45 / 55 W | +70 W / 25 W / 87 °C |
-| NvTgpHold-Manual | Turbo base | 35 / 50 / 65 W | +70 W / 25 W / 87 °C |
+| NvTgpHold-Manual | Turbo base | 35 / 50 / 65 W | +70 W / 25 W / 85 °C |
+
+NvTgpHold-Manual uses a max-cooling fan curve (linear to 50 °C / 50%, then up to
+100% at 70 °C, flat above), CPU limit 90 °C, GPU target 85 °C, and -25 CO undervolt
+(the undervolt applies only with the experimental CPU tuning on). A separate **Fan
+profile** submenu overrides the fan curve independently of the power profile: Silent,
+Balanced, Turbo, or Max cooling (or "Follow power profile" to clear the override).
 
 Apply order mirrors G-Helper: the ASUS mode first (so the EC loads that mode's
 baseline), then the fan curves, then CPU PPT, then GPU temp / boost / power — GPU
@@ -50,10 +56,13 @@ overwrite each other. The active profile and its CPU limits are restored on laun
 These are **off by default and opt-in**, each behind a consent dialog, like the EC
 ladder hold. They are under **Power profile → Experimental expansions**.
 
-- **GPU core/memory overclock** (NvAPI). While on, selecting a profile also applies
-  its GPU clock offsets (the NvTgpHold-Manual profile is +100 MHz core / +1000 MHz
-  memory); the others are 0. Turning it off sets the offset back to 0. Nothing is
-  flashed and offsets reset on reboot. Too high an offset causes artifacts or a reset.
+- **GPU core/memory overclock** (NvAPI). Two ways: the **GPU overclock** picker applies
+  a core offset (25 MHz steps, 100-300) and a memory offset (300-3000 in set steps)
+  immediately; or the "Apply GPU OC from profile" toggle applies the active profile's
+  offsets (NvTgpHold-Manual is +100 core / +1000 memory). Offsets reset on reboot and
+  "0" clears them. Nothing is flashed. Too high an offset causes artifacts or a reset.
+  (Per-domain xbar/sys/video overclock and undervolt, mVolt+ style, are not implemented
+  here — they go through NVIDIA's private clock-domain interface.)
 - **CPU undervolt + temperature** (Ryzen SMU, via PawnIO and the signed `RyzenSMU.bin`
   module next to the exe). While on, selecting a profile also sets its CPU temperature
   limit and all-core Curve Optimizer offset through the SMU. Applied on profile select
@@ -61,9 +70,11 @@ ladder hold. They are under **Power profile → Experimental expansions**.
   undervolt. The SMU mailbox is shared with ASUS services, so a write can collide; an
   over-aggressive undervolt destabilises under load. Only Strix Point (Ryzen AI 300) is
   enabled.
-- **GPU display mode** (ASUS ATK): Eco / Standard / Ultimate. Switching into or out of
-  Ultimate (MUX) needs a reboot, which NvTgpHold offers after you confirm; Eco and
-  Standard re-initialise the display (sign out or reboot for a clean switch).
+- **GPU display mode** (ASUS ATK): Eco / Standard / Ultimate / Optimized. Switching into
+  or out of Ultimate (MUX) needs a reboot, which NvTgpHold offers after you confirm; Eco
+  and Standard re-initialise the display (sign out or reboot for a clean switch).
+  Optimized keeps the dGPU on while on AC and switches to Eco (iGPU only) on battery,
+  applied automatically on power and resume events.
 
 Do not run the experimental EC CPU ladder hold at the same time as a profile — both can
 touch the EC fan state.

@@ -53,7 +53,8 @@ namespace NvTgpHold
         private static PowerProfile _profile;               // active full power profile (replaces G-Helper), null = off
         private static ToolStripMenuItem _profileMenu, _ocMenu, _smuTuningMenu, _fanMenu, _gpuCoreMenu, _gpuMemMenu, _gpuVideoMenu, _gpuSysXbarMenu;
         private static FanProfile _fanProfile;              // active standalone fan override, null = follow the power profile
-        private static int _gpuCore, _gpuMem, _gpuVideo;    // manually-picked GPU OC offsets (MHz)
+        private static int _gpuCore, _gpuMem;              // last accepted core/memory pair (MHz)
+        private static int? _gpuVideo;                    // unknown after relaunch until a write is accepted
         private static int? _gpuSysXbar;                   // unknown until both private-domain offsets are confirmed
         private static string _profileNote = "";
         private static string _cpuNote = "", _autoNote = "", _ghelper = "";
@@ -121,7 +122,7 @@ namespace NvTgpHold
             {
                 if (oc.Checked && !_settings.GpuOc && MessageBox.Show(OcRisk, "NvTgpHold", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) { oc.Checked = false; return; }
                 _settings.GpuOc = oc.Checked; SettingsStore.Save(_settings);
-                if (_settings.GpuOc && _profile != null) { bool ok = ApplyGpuClocks(_profile.GpuCore, _profile.GpuMem, out string d); _last = "GPU OC " + (ok ? d : "FAIL: " + d); }
+                if (_settings.GpuOc && _profile != null) { bool ok = ApplyProfileGpuOc(_profile, out string d); _last = "GPU OC " + (ok ? d : "FAIL: " + d); }
                 else if (!_settings.GpuOc) { bool ok = ApplyGpuClocks(0, 0, out string d); _last = "GPU OC clear " + (ok ? d : "FAIL: " + d); }
                 Refresh();
             };
@@ -649,6 +650,26 @@ namespace NvTgpHold
             _gpuCore = core; _gpuMem = mem;
             return true;
         }
+
+        private static bool ApplyProfileGpuOc(PowerProfile p, out string detail)
+        {
+            bool success = ApplyGpuClocks(p.GpuCore, p.GpuMem, out detail);
+            // A profile owns all OC domains while enabled. Unknown values after relaunch are not verified zeros.
+            // Once cleared, avoid redundant writes on later power events. A failed clear stays unknown/retryable.
+            if (!_gpuVideo.HasValue || _gpuVideo.Value != 0)
+            {
+                bool video = NvOc.SetVideoClock(0, out string vd); success &= video;
+                _gpuVideo = video ? 0 : (int?)null;
+                detail += (video ? ", video->0 " : ", video clear FAIL: ") + vd;
+            }
+            if (!_gpuSysXbar.HasValue || _gpuSysXbar.Value != 0 || NvSysXbar.NeedsReset)
+            {
+                bool sx = NvSysXbar.SetLinkedOffset(0, out string sd); success &= sx;
+                _gpuSysXbar = sx ? 0 : (int?)null;
+                detail += (sx ? ", SYS/XBAR->0 " : ", SYS/XBAR clear FAIL: ") + sd;
+            }
+            return success;
+        }
         private static void SetGpuCore(int mhz) { if (mhz > 0 && !ConsentOc()) return; ApplyManualOc(mhz, _gpuMem); }
         private static void SetGpuMem(int mhz) { if (mhz > 0 && !ConsentOc()) return; ApplyManualOc(_gpuCore, mhz); }
         private static void ApplyManualOc(int core, int mem) { bool ok = ApplyGpuClocks(core, mem, out string d); _last = "GPU OC " + (ok ? d : "FAIL: " + d); Refresh(); }
@@ -776,12 +797,8 @@ namespace NvTgpHold
             // undervolt (Ryzen SMU). Each is skipped unless its toggle is on; a failure is reported, not fatal.
             if (full && _settings.GpuOc)
             {
-                bool ok = ApplyGpuClocks(p.GpuCore, p.GpuMem, out string od); success &= ok; notes.Append(ok ? ", OC " + od : ", OC FAIL: " + od);
-                // Profiles define only core/memory. With the profile owning GPU OC, clear the picker-only video and
-                // SYS/XBAR offsets too (when dirty) so switching profiles doesn't leave a stale manual offset applied -
-                // matching Restore defaults, which zeroes all four. No-op once they are already 0.
-                if (_gpuVideo != 0) { if (NvOc.SetVideoClock(0, out string vd)) _gpuVideo = 0; notes.Append(", video->0 " + vd); }
-                if ((_gpuSysXbar ?? 0) != 0 || NvSysXbar.NeedsReset) { bool sx = NvSysXbar.SetLinkedOffset(0, out string sd); _gpuSysXbar = sx ? 0 : (int?)null; notes.Append(", SYS/XBAR->0 " + sd); }
+                bool ok = ApplyProfileGpuOc(p, out string od); success &= ok;
+                notes.Append(ok ? ", OC " : ", OC FAIL: ").Append(od);
             }
             if (full && _settings.SmuTuning && RyzenSmu.Supported)
             {

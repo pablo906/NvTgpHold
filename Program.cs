@@ -774,7 +774,15 @@ namespace NvTgpHold
             else notes.Append(", GPU power/boost held by CURRENT hold");
             // Experimental, opt-in, full apply only (never the fast re-assert): GPU clock offset (NVAPI) and CPU temp +
             // undervolt (Ryzen SMU). Each is skipped unless its toggle is on; a failure is reported, not fatal.
-            if (full && _settings.GpuOc) { bool ok = ApplyGpuClocks(p.GpuCore, p.GpuMem, out string od); success &= ok; notes.Append(ok ? ", OC " + od : ", OC FAIL: " + od); }
+            if (full && _settings.GpuOc)
+            {
+                bool ok = ApplyGpuClocks(p.GpuCore, p.GpuMem, out string od); success &= ok; notes.Append(ok ? ", OC " + od : ", OC FAIL: " + od);
+                // Profiles define only core/memory. With the profile owning GPU OC, clear the picker-only video and
+                // SYS/XBAR offsets too (when dirty) so switching profiles doesn't leave a stale manual offset applied -
+                // matching Restore defaults, which zeroes all four. No-op once they are already 0.
+                if (_gpuVideo != 0) { if (NvOc.SetVideoClock(0, out string vd)) _gpuVideo = 0; notes.Append(", video->0 " + vd); }
+                if ((_gpuSysXbar ?? 0) != 0 || NvSysXbar.NeedsReset) { bool sx = NvSysXbar.SetLinkedOffset(0, out string sd); _gpuSysXbar = sx ? 0 : (int?)null; notes.Append(", SYS/XBAR->0 " + sd); }
+            }
             if (full && _settings.SmuTuning && RyzenSmu.Supported)
             {
                 success &= RyzenSmu.SetThermalLimit(p.CpuTemp, out string td);

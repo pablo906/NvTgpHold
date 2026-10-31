@@ -74,6 +74,8 @@ namespace NvTgpHold
         public string Profile = "";        // active full power profile (PowerProfiles name), "" = off
         public bool GpuOc;                 // experimental: apply the profile's GPU core/mem clock offset (NVAPI)
         public bool SmuTuning;             // experimental: apply the profile's CPU temp limit + undervolt (Ryzen SMU)
+        public string FanProfile = "";     // standalone fan curve override (FanProfiles name), "" = follow the power profile
+        public bool GpuOptimized;          // GPU display mode "Optimized": Standard on AC, Eco on battery
 
         public static Settings Parse(IEnumerable<string> lines)
         {
@@ -94,6 +96,8 @@ namespace NvTgpHold
                     case "profile": s.Profile = PowerProfiles.Find(v)?.Name ?? ""; break;
                     case "gpuoc": s.GpuOc = v == "1"; break;
                     case "smutuning": s.SmuTuning = v == "1"; break;
+                    case "fanprofile": s.FanProfile = FanProfiles.Find(v)?.Name ?? ""; break;
+                    case "gpuoptimized": s.GpuOptimized = v == "1"; break;
                 }
             }
             return s;
@@ -109,6 +113,8 @@ namespace NvTgpHold
             "profile=" + Profile,
             "gpuoc=" + (GpuOc ? "1" : "0"),
             "smutuning=" + (SmuTuning ? "1" : "0"),
+            "fanprofile=" + FanProfile,
+            "gpuoptimized=" + (GpuOptimized ? "1" : "0"),
         };
     }
 

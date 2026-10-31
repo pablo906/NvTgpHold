@@ -119,8 +119,8 @@ namespace NvTgpHold
             {
                 if (oc.Checked && !_settings.GpuOc && MessageBox.Show(OcRisk, "NvTgpHold", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) { oc.Checked = false; return; }
                 _settings.GpuOc = oc.Checked; SettingsStore.Save(_settings);
-                if (_settings.GpuOc && _profile != null) { NvOc.SetClocks(_profile.GpuCore, _profile.GpuMem, out string d); _last = "GPU OC " + d; }
-                else if (!_settings.GpuOc) { NvOc.SetClocks(0, 0, out string d); _last = "GPU OC cleared (" + d + ")"; }
+                if (_settings.GpuOc && _profile != null) { bool ok = ApplyGpuClocks(_profile.GpuCore, _profile.GpuMem, out string d); _last = "GPU OC " + (ok ? d : "FAIL: " + d); }
+                else if (!_settings.GpuOc) { bool ok = ApplyGpuClocks(0, 0, out string d); _last = "GPU OC clear " + (ok ? d : "FAIL: " + d); }
                 Refresh();
             };
             _profileMenu.DropDownItems.Add(oc); _ocMenu = oc;
@@ -473,14 +473,17 @@ namespace NvTgpHold
             if (_ecMenu != null && _ecMenu.Checked) _ecMenu.Checked = false;
             _cpu = null; _settings.CpuProfile = ""; _profile = null; _settings.Profile = ""; _profileNote = "";
             // Stock also means no experimental GPU OC or SMU undervolt left applied.
-            if (_settings.GpuOc) { NvOc.SetClocks(0, 0, out _); _settings.GpuOc = false; if (_ocMenu != null) _ocMenu.Checked = false; }
+            if (_settings.GpuOc) { _settings.GpuOc = false; if (_ocMenu != null) _ocMenu.Checked = false; }
             if (_settings.SmuTuning && RyzenSmu.Supported) { RyzenSmu.SetUndervolt(0, out _); _settings.SmuTuning = false; if (_smuTuningMenu != null) _smuTuningMenu.Checked = false; }
-            if (_gpuCore != 0 || _gpuMem != 0) { _gpuCore = 0; _gpuMem = 0; NvOc.SetClocks(0, 0, out _); }
-            if (_gpuVideo != 0) { _gpuVideo = 0; NvOc.SetVideoClock(0, out _); }
+            bool ocCleared = ApplyGpuClocks(0, 0, out string ocReset);
+            bool videoCleared = true; string videoReset = "";
+            if (_gpuVideo != 0) { videoCleared = NvOc.SetVideoClock(0, out videoReset); if (videoCleared) _gpuVideo = 0; }
             _fanProfile = null; _settings.FanProfile = ""; _settings.GpuOptimized = false;
             SettingsStore.Save(_settings); BoostMode.RestorePrior(); _cpuNote = "";
             _sync = "";
             _last = "restored to stock 95+25 (" + gpu + ")";
+            if (!ocCleared) _last += " | GPU OC clear FAIL: " + ocReset;
+            if (!videoCleared) _last += " | video OC clear FAIL: " + videoReset;
             Balloon("MAX: " + rm + "\nCURRENT->95: " + rc + "\nBoost->25 (on): " + rb + "\nNVPCF additional->0: " + rp);
             Refresh();
         }
@@ -549,19 +552,27 @@ namespace NvTgpHold
 
         private static bool _ocConsented;
         private static bool ConsentOc() { if (_ocConsented) return true; if (MessageBox.Show(OcRisk, "NvTgpHold", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK) { _ocConsented = true; return true; } return false; }
-        private static void SetGpuCore(int mhz) { if (mhz > 0 && !ConsentOc()) return; _gpuCore = mhz; ApplyManualOc(); }
-        private static void SetGpuMem(int mhz) { if (mhz > 0 && !ConsentOc()) return; _gpuMem = mhz; ApplyManualOc(); }
-        private static void ApplyManualOc() { bool ok = NvOc.SetClocks(_gpuCore, _gpuMem, out string d); _last = "GPU OC " + (ok ? d : "FAIL: " + d); Refresh(); }
+        // Profile, picker and reset writes share the last accepted pair. A one-domain picker must retain the other
+        // domain's profile offset, and a rejected write must not become the input to the next picker change.
+        private static bool ApplyGpuClocks(int core, int mem, out string detail)
+        {
+            if (!NvOc.SetClocks(core, mem, out detail)) return false;
+            _gpuCore = core; _gpuMem = mem;
+            return true;
+        }
+        private static void SetGpuCore(int mhz) { if (mhz > 0 && !ConsentOc()) return; ApplyManualOc(mhz, _gpuMem); }
+        private static void SetGpuMem(int mhz) { if (mhz > 0 && !ConsentOc()) return; ApplyManualOc(_gpuCore, mhz); }
+        private static void ApplyManualOc(int core, int mem) { bool ok = ApplyGpuClocks(core, mem, out string d); _last = "GPU OC " + (ok ? d : "FAIL: " + d); Refresh(); }
         // Video clock is a separate SetPstates20 call (public VIDEO domain) so it can't break the core/mem path.
-        private static void SetGpuVideo(int mhz) { if (mhz > 0 && !ConsentOc()) return; _gpuVideo = mhz; bool ok = NvOc.SetVideoClock(mhz, out string d); _last = "GPU video OC " + (ok ? d : "FAIL: " + d); Refresh(); }
+        private static void SetGpuVideo(int mhz) { if (mhz > 0 && !ConsentOc()) return; bool ok = NvOc.SetVideoClock(mhz, out string d); if (ok) _gpuVideo = mhz; _last = "GPU video OC " + (ok ? d : "FAIL: " + d); Refresh(); }
 
         // GPU "Optimized" policy: dGPU on (Standard) while on AC, Eco (iGPU only) on battery.
         private static void ApplyOptimizedEco(string why)
         {
             if (!_settings.GpuOptimized) return;
             bool onBattery = SystemInformation.PowerStatus.PowerLineStatus == PowerLineStatus.Offline;
-            AtkAcpi.SetGpuEco(onBattery ? 1 : 0, out string d);
-            _last = "Optimized: " + (onBattery ? "Eco (battery)" : "Standard (AC)") + " (" + why + ", " + d + ")";
+            bool ok = AtkAcpi.SetGpuEco(onBattery ? 1 : 0, out string d);
+            _last = "Optimized: " + (ok ? (onBattery ? "Eco (battery)" : "Standard (AC)") : "FAIL") + " (" + why + ", " + d + ")";
         }
 
         private const string OcTip =
@@ -597,8 +608,9 @@ namespace NvTgpHold
             if (MessageBox.Show("Set GPU mode to " + target + "?\nCurrent: " + curDetail + (_settings.GpuOptimized ? " (Optimized policy on)" : "") + ".\n\n" + note + "\nClose games and other GPU apps first.",
                     "NvTgpHold", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
             bool ok = GpuMode.Apply(target, out bool reboot, out string detail);
-            _settings.GpuOptimized = optimized; SettingsStore.Save(_settings);
-            if (ok && optimized) { ApplyOptimizedEco("selected"); detail += " | " + _last; }
+            // A rejected selection must preserve the old automatic policy, including when leaving Optimized fails.
+            if (ok) { _settings.GpuOptimized = optimized; SettingsStore.Save(_settings); }
+            if (ok && optimized && !reboot) { ApplyOptimizedEco("selected"); detail += " | " + _last; }
             else _last = "GPU mode: " + detail;
             if (ok && reboot && MessageBox.Show(detail + "\n\nReboot now to apply it? Save your work first.",
                     "NvTgpHold", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
@@ -651,7 +663,7 @@ namespace NvTgpHold
             else notes.Append(", GPU power/boost held by CURRENT hold");
             // Experimental, opt-in, full apply only (never the fast re-assert): GPU clock offset (NVAPI) and CPU temp +
             // undervolt (Ryzen SMU). Each is skipped unless its toggle is on; a failure is reported, not fatal.
-            if (full && _settings.GpuOc) { bool ok = NvOc.SetClocks(p.GpuCore, p.GpuMem, out string od); notes.Append(ok ? ", OC " + od : ", OC FAIL: " + od); }
+            if (full && _settings.GpuOc) { bool ok = ApplyGpuClocks(p.GpuCore, p.GpuMem, out string od); notes.Append(ok ? ", OC " + od : ", OC FAIL: " + od); }
             if (full && _settings.SmuTuning && RyzenSmu.Supported)
             {
                 RyzenSmu.SetThermalLimit(p.CpuTemp, out string td);

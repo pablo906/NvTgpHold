@@ -53,10 +53,38 @@ namespace NvTgpHold
             new PowerProfile("Silent",            2, 28, 45, 65,   0,   5,  85,  96, -25,   0,    0, "1E-31-3B-42-47-50-5A-64-00-00-03-0C-14-1C-22-29", "1E-31-3B-42-47-50-5A-64-00-00-04-11-1B-23-28-2D"),
             new PowerProfile("Balanced",          0, 35, 50, 65,  15,  25,  85,  95, -20,   0,    0, "1E-28-32-3C-46-50-5A-64-00-09-14-1E-28-33-64-64", "1E-28-33-3C-46-50-5A-64-00-09-13-1D-27-32-64-64"),
             new PowerProfile("Turbo",             1, 35, 45, 55,  70,  25,  87,  96, -25,   0,    0, "1E-28-32-3C-46-50-5A-64-11-1E-28-34-46-64-64-64", "1E-28-32-3C-46-50-5A-64-16-1F-28-32-46-64-64-64"),
-            new PowerProfile("NvTgpHold-Manual",  1, 35, 50, 65,  70,  25,  87,  90, -25, 100, 1000, "1E-28-32-3C-46-50-5A-64-11-1E-28-34-46-64-64-64", "1E-28-32-3C-46-50-5A-64-16-1F-28-32-46-64-64-64"),
+            // NvTgpHold-Manual = Jose's spec: max-cooling fan curve, GPU temp 85, CPU 90, -25 CO; aggressive power from his Manual.
+            new PowerProfile("NvTgpHold-Manual",  1, 35, 50, 65,  70,  25,  85,  90, -25, 100, 1000, FanProfiles.MaxCooling, FanProfiles.MaxCooling),
         };
 
         public static PowerProfile Find(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+            foreach (var p in Presets) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return p;
+            return null;
+        }
+    }
+
+    // Standalone fan-curve profiles (separate from the power profile), selectable from the tray. Silent/Balanced/Turbo
+    // are Jose's GHelper fan curves; Max cooling is his spec: ramp linearly to 50C/50%, then 50->70C up to 100%, flat after.
+    internal sealed class FanProfile
+    {
+        public readonly string Name; public readonly byte[] Cpu, Gpu;
+        public FanProfile(string name, string cpu, string gpu) { Name = name; Cpu = Parse(cpu); Gpu = Parse(gpu); }
+        private static byte[] Parse(string s) { var p = s.Split('-'); var b = new byte[16]; for (int i = 0; i < 16 && i < p.Length; i++) byte.TryParse(p[i], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out b[i]); return b; }
+    }
+
+    internal static class FanProfiles
+    {
+        public const string MaxCooling = "1E-28-32-3C-46-50-5A-64-1E-28-32-4B-64-64-64-64";   // 30/40/50/75/100/100/100/100 %
+        public static readonly FanProfile[] Presets =
+        {
+            new FanProfile("Silent",      "1E-31-3B-42-47-50-5A-64-00-00-03-0C-14-1C-22-29", "1E-31-3B-42-47-50-5A-64-00-00-04-11-1B-23-28-2D"),
+            new FanProfile("Balanced",    "1E-28-32-3C-46-50-5A-64-00-09-14-1E-28-33-64-64", "1E-28-33-3C-46-50-5A-64-00-09-13-1D-27-32-64-64"),
+            new FanProfile("Turbo",       "1E-28-32-3C-46-50-5A-64-11-1E-28-34-46-64-64-64", "1E-28-32-3C-46-50-5A-64-16-1F-28-32-46-64-64-64"),
+            new FanProfile("Max cooling", MaxCooling, MaxCooling),
+        };
+        public static FanProfile Find(string name)
         {
             if (string.IsNullOrEmpty(name)) return null;
             foreach (var p in Presets) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return p;

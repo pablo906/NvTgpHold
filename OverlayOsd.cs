@@ -28,11 +28,16 @@ namespace NvTgpHold
         private static SynchronizationContext _ui;
         private static PerformanceCounter _cpuLoad, _cpuTempPc, _cpuPowerPc;
         private static bool _cpuSensorsInit;
+        private static EtwFpsMonitor _fps;
+        private static readonly int _selfPid = Process.GetCurrentProcess().Id;
         private static readonly object _lock = new object();
+
+        [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
 
         private sealed class Snapshot
         {
-            public int GpuTemp = -1, GpuUtil = -1, GpuFan = -1, CpuUtil = -1, CpuFan = -1, CpuTemp = -1;
+            public int GpuTemp = -1, GpuUtil = -1, GpuFan = -1, CpuUtil = -1, CpuFan = -1, CpuTemp = -1, Fps = -1;
             public double GpuPower = double.NaN, CpuPower = double.NaN;
         }
         private static volatile Snapshot _snap = new Snapshot();
@@ -47,6 +52,7 @@ namespace NvTgpHold
             _ui = SynchronizationContext.Current;
             _win = new OsdWindow();
             _win.Show();
+            _fps = new EtwFpsMonitor(); try { _fps.Start(); } catch { }   // fail-safe: FPS shows "--" if ETW can't start
             _cts = new CancellationTokenSource();
             var token = _cts.Token;
             int gen = ++_gen;                                    // this worker's generation; a later Show supersedes it
@@ -71,6 +77,7 @@ namespace NvTgpHold
         {
             try { _cts?.Cancel(); } catch { }
             _cts = null;
+            try { _fps?.Dispose(); } catch { } _fps = null;
             if (_win != null) { try { _win.Close(); _win.Dispose(); } catch { } _win = null; }
         }
 
@@ -100,6 +107,12 @@ namespace NvTgpHold
             try { if (_cpuPowerPc != null) { float mw = _cpuPowerPc.NextValue(); if (mw > 0f) s.CpuPower = mw / 1000.0; } } catch { }
             s.GpuFan = AtkAcpi.ReadFan(true);                    // ATK, not NVIDIA - safe to read during a dGPU restart
             s.CpuFan = AtkAcpi.ReadFan(false);
+            // FPS of the foreground app (excluding ourselves) via the ETW present monitor; -1/0 shows "--".
+            if (_fps != null && _fps.Supported)
+            {
+                try { GetWindowThreadProcessId(GetForegroundWindow(), out uint fg); if (fg != 0 && fg != (uint)_selfPid) _fps.SetTargetPid((int)fg); } catch { }
+                s.Fps = _fps.SampleFps();
+            }
             return s;
         }
 
@@ -141,15 +154,18 @@ namespace NvTgpHold
             float fs = 13f * Scale;                                  // Consolas 13px base * scale
             int pad = (int)(6 * Scale), gap = (int)(4 * Scale), barW = (int)(40 * Scale), lineGap = (int)(3 * Scale);
             using (var font = new Font("Consolas", fs, FontStyle.Regular, GraphicsUnit.Pixel))
+            using (var fpsFont = new Font("Consolas", fs * 1.6f, FontStyle.Bold, GraphicsUnit.Pixel))
             {
                 string g = "GPU " + Temp(s.GpuTemp) + "  " + Pow(s.GpuPower).PadLeft(6) + "  " + Pct(s.GpuUtil).PadLeft(4) + "  " + Rpm(s.GpuFan) + " RPM";
                 string c = "CPU " + Temp(s.CpuTemp) + "  " + Pow(s.CpuPower).PadLeft(6) + "  " + Pct(s.CpuUtil).PadLeft(4) + "  " + Rpm(s.CpuFan) + " RPM";
-                Size gm, cm;
+                string fps = s.Fps > 0 ? s.Fps.ToString(CultureInfo.InvariantCulture) : "--";
+                Size gm, cm, fm;
                 using (var measure = new Bitmap(1, 1)) using (var mg = Graphics.FromImage(measure))
-                { gm = Size.Ceiling(mg.MeasureString(g, font)); cm = Size.Ceiling(mg.MeasureString(c, font)); }
+                { gm = Size.Ceiling(mg.MeasureString(g, font)); cm = Size.Ceiling(mg.MeasureString(c, font)); fm = Size.Ceiling(mg.MeasureString(fps, fpsFont)); }
                 int textW = Math.Max(gm.Width, cm.Width);
                 int lineH = Math.Max(gm.Height, cm.Height);
-                int w = pad * 2 + textW + gap + barW, h = pad * 2 + lineH * 2 + lineGap;
+                int rowsX = pad + fm.Width + gap;                // bold FPS occupies the left column
+                int w = rowsX + textW + gap + barW + pad, h = pad * 2 + lineH * 2 + lineGap;
 
                 var bmp = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
                 using (var gr = Graphics.FromImage(bmp))
@@ -160,11 +176,13 @@ namespace NvTgpHold
                     int radius = (int)(3 * Scale);
                     using (var bg = new SolidBrush(Color.FromArgb(BgAlpha, 0, 0, 0)))
                         FillRounded(gr, new Rectangle(0, 0, w, h), radius, bg);
+                    using (var fb = new SolidBrush(Color.FromArgb(235, 235, 235)))
+                        gr.DrawString(fps, fpsFont, fb, pad, (h - fm.Height) / 2f);     // FPS, bold, vertically centered
                     int y0 = pad, y1 = pad + lineH + lineGap;
-                    using (var gb = new SolidBrush(Gpu)) gr.DrawString(g, font, gb, pad, y0);
-                    using (var cb = new SolidBrush(Cpu)) gr.DrawString(c, font, cb, pad, y1);
-                    DrawBar(gr, pad + textW + gap, y0 + lineH / 4, barW, lineH / 2, s.GpuUtil, Gpu);
-                    DrawBar(gr, pad + textW + gap, y1 + lineH / 4, barW, lineH / 2, s.CpuUtil, Cpu);
+                    using (var gb = new SolidBrush(Gpu)) gr.DrawString(g, font, gb, rowsX, y0);
+                    using (var cb = new SolidBrush(Cpu)) gr.DrawString(c, font, cb, rowsX, y1);
+                    DrawBar(gr, rowsX + textW + gap, y0 + lineH / 4, barW, lineH / 2, s.GpuUtil, Gpu);
+                    DrawBar(gr, rowsX + textW + gap, y1 + lineH / 4, barW, lineH / 2, s.CpuUtil, Cpu);
                     gr.Flush();
                 }
                 var scr = Screen.PrimaryScreen.Bounds;

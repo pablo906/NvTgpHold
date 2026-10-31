@@ -284,14 +284,15 @@ namespace NvTgpHold
         private static string WriteGpuPower(int w) => AtkAcpi.SetGpuPower(w, out string d) ? null : d;
 
         // Writes 0x98 so 0x99 + 0x98 equals the hold, then reads it back. Sets _sync; returns true only on a verified match.
-        private static bool SyncTgp(string why)
+        private static bool SyncTgp(string why, int targetW = 0)
         {
-            if (!_syncTgp || _holdTargetW <= 0 || GpuGuard.Restarting) return false;
+            int target = targetW > 0 ? targetW : _holdTargetW;
+            if (!_syncTgp || target <= 0 || GpuGuard.Restarting) return false;
             _lastSync = DateTime.UtcNow;
             // Never write 0x98 before the value to restore is captured; a failed read here waits for the next poll.
             if (_priorPower < 0) _priorPower = AtkAcpi.ReadGpuPower();
             if (_priorPower < 0) { _sync = "sync unavailable: can't read NVPCF power (0x98) to save it before writing"; return false; }
-            bool ok = TgpSync.Apply(_holdTargetW, HoldBoost, MaxW, AtkAcpi.ReadGpuBase, AtkAcpi.ReadGpuPower, WriteGpuPower, out string note);
+            bool ok = TgpSync.Apply(target, HoldBoost, MaxW, AtkAcpi.ReadGpuBase, AtkAcpi.ReadGpuPower, WriteGpuPower, out string note);
             _sync = ok && !note.StartsWith("in sync") ? note + " (" + why + ")" : note;
             _gpuBase = AtkAcpi.ReadGpuBase(); _gpuPower = AtkAcpi.ReadGpuPower();
             return ok;
@@ -338,23 +339,44 @@ namespace NvTgpHold
         private static void DoHold(int watts)
         {
             if (!double.IsNaN(_max) && watts > (int)Math.Floor(_max + 0.01)) { Balloon("Target " + watts + " W exceeds live MAX " + _max.ToString("0") + " W. Set MAX higher first (reboot)."); return; }
-            AtkAcpi.SetBoost(HoldBoost, out string boostDetail);   // normally OFF so the platform stops re-advertising over the hold
-            System.Threading.Thread.Sleep(250);            // let the boost-toggle notify settle before E633 (matches GpuPowerSlider)
-            bool ok = ApplyCurrent(watts, out string detail);
-            if (ok) { _holdTargetW = watts; _drifts = 0; _lastReassert = DateTime.UtcNow; _holdTimer.Start(); _last = "holding " + watts + " W (" + (_keepBoost ? "boost on: " : "boost off: ") + boostDetail + ")"; if (_syncTgp && !SyncTgp("hold")) Balloon(_sync); }
-            else { _last = "set failed: " + detail + " | boost: " + boostDetail; Balloon(detail + "\nboost: " + boostDetail); }
+            bool ok = ApplyHeldCurrent(watts, "hold", out bool currentApplied, out string detail);
+            if (currentApplied) { _holdTargetW = watts; _drifts = 0; _lastReassert = DateTime.UtcNow; _holdTimer.Start(); }
+            _last = currentApplied ? (ok ? "holding " : "hold incomplete: ") + watts + " W (" + detail + ")" : "set failed: " + detail;
+            if (!currentApplied)
+            {
+                // Preparing a new target may already have changed NVPCF. A rejected E633 must not leave
+                // that preparation in place over the previous hold (or a profile with no active hold).
+                if (_holdTargetW > 0)
+                {
+                    bool restored = ApplyHeldCurrent(_holdTargetW, "target rejected", out _, out string rd);
+                    _last += restored ? " | previous hold restored" : " | previous hold recovery incomplete: " + rd;
+                }
+                else { RestorePrior("target rejected"); ReturnGpuToProfile(); }
+            }
+            if (!ok) Balloon(_last);
             Refresh();
+        }
+
+        private static bool ApplyHeldCurrent(int watts, string why, out bool currentApplied, out string detail)
+        {
+            if (GpuGuard.Restarting) { currentApplied = false; detail = "GPU restarting"; return false; }
+            return HoldApply.Apply(
+                (out string d) => AtkAcpi.SetBoost(HoldBoost, out d),
+                (out string d) =>
+                {
+                    if (!_syncTgp) { d = "disabled"; return true; }
+                    bool ok = SyncTgp(why, watts); d = _sync; return ok;
+                },
+                () => System.Threading.Thread.Sleep(250),
+                (out string d) => ApplyCurrent(watts, out d), out currentApplied, out detail);
         }
 
         private static void Reassert(string why)
         {
             if (_holdTargetW <= 0 || GpuGuard.Restarting) return;
             _lastReassert = DateTime.UtcNow;
-            AtkAcpi.SetBoost(HoldBoost, out _);
-            SyncTgp(why);
-            System.Threading.Thread.Sleep(250);
-            bool ok = ApplyCurrent(_holdTargetW, out string detail);
-            _last = ok ? ("re-asserted " + _holdTargetW + " W (" + why + ")") : ("re-assert failed (" + why + "): " + detail);
+            bool ok = ApplyHeldCurrent(_holdTargetW, why, out _, out string detail);
+            _last = ok ? ("re-asserted " + _holdTargetW + " W (" + why + ")") : ("re-assert incomplete (" + why + "): " + detail);
             Refresh();
         }
 
@@ -806,16 +828,9 @@ namespace NvTgpHold
                 // All three are best-effort: run them unconditionally and aggregate every result. E633 confirming its
                 // own request does not prove the boost-off or the NVPCF sync that must precede it actually took, so a
                 // rejected SetBoost or failed SyncTgp must still fail the apply and surface its detail in the note.
-                bool boostOk = AtkAcpi.SetBoost(HoldBoost, out string hb);
-                bool syncOk = true; string syncNote = "";
-                if (_syncTgp) { syncOk = SyncTgp("profile " + p.Name); syncNote = _sync; }
-                System.Threading.Thread.Sleep(250);          // let the boost toggle settle before E633 (as DoHold/Reassert do)
-                bool held = ApplyCurrent(_holdTargetW, out string hc);
-                bool reassert = boostOk & syncOk & held;     // &, not &&: all three already ran above; none short-circuits
+                bool reassert = ApplyHeldCurrent(_holdTargetW, "profile " + p.Name, out _, out string holdDetail);
                 success &= reassert; _lastReassert = DateTime.UtcNow;
-                notes.Append(held ? ", hold re-asserted " + _holdTargetW + " W over profile" : ", hold re-assert FAIL: " + hc);
-                notes.Append(boostOk ? " (boost " + hb + ")" : " (boost FAIL: " + hb + ")");
-                if (_syncTgp && !syncOk) notes.Append(" (sync FAIL: " + syncNote + ")");
+                notes.Append(reassert ? ", hold re-asserted " : ", hold re-assert incomplete: ").Append(_holdTargetW).Append(" W over profile (").Append(holdDetail).Append(")");
             }
             // Experimental, opt-in, full apply only (never the fast re-assert): GPU clock offset (NVAPI) and CPU temp +
             // undervolt (Ryzen SMU). Each is skipped unless its toggle is on; a failure is reported, not fatal.

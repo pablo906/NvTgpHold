@@ -129,6 +129,12 @@ a target above a readable live MAX. By default it disables Dynamic Boost, sets
 CURRENT and checks for a drop every 3 seconds. It also re-applies the target every
 5 minutes and on power/resume/unlock events. Firmware can still override it.
 
+Selecting a target, re-asserting it and applying a profile all prepare Dynamic
+Boost and NVPCF first, allow the notifications to settle, then send CURRENT last.
+Failure of any required step is reported as incomplete, even if CURRENT itself
+was accepted. An accepted target stays managed for later recovery; a rejected
+CURRENT request does not replace the previously managed target.
+
 **Sync NVPCF TGP to hold** is on by default. It writes the variable ASUS GPU power
 setting so that `fixed base + variable = target`, then verifies readback. It saves
 the variable setting before its first write and restores it on stop, uncheck or

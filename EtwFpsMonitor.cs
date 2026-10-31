@@ -21,6 +21,7 @@ namespace NvTgpHold
         private const uint EVENT_TRACE_REAL_TIME_MODE = 0x00000100;
         private const uint WNODE_FLAG_TRACED_GUID = 0x00020000;
         private const uint PROCESS_TRACE_MODE_REAL_TIME = 0x00000100, PROCESS_TRACE_MODE_EVENT_RECORD = 0x10000000;
+        private const uint PROCESS_TRACE_MODE_RAW_TIMESTAMP = 0x00001000; // SampleFps compares QPC ticks, not converted FILETIME
         private const uint EVENT_CONTROL_CODE_ENABLE_PROVIDER = 1;
         private const uint EVENT_FILTER_TYPE_EVENT_ID = 0x80000200;
         private const byte TRACE_LEVEL_INFORMATION = 4;
@@ -43,6 +44,8 @@ namespace NvTgpHold
 
         public bool Start()
         {
+            // OpenTrace writes the complete native structure. Fail closed before any native call if ABI drifted.
+            if (!NativeLayoutValid) return false;
             try
             {
                 QueryPerformanceFrequency(out _freq);
@@ -76,7 +79,7 @@ namespace NvTgpHold
                 var log = new EVENT_TRACE_LOGFILE
                 {
                     LoggerName = _session,
-                    ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD,
+                    ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD | PROCESS_TRACE_MODE_RAW_TIMESTAMP,
                     EventRecordCallback = _callback,
                 };
                 _consumerHandle = OpenTrace(ref log);
@@ -119,6 +122,8 @@ namespace NvTgpHold
             try
             {
                 if (record == IntPtr.Zero) return;
+                // EnableTraceEx2 can fall back to an unfiltered provider. Only count Present_Info events then too.
+                if ((ushort)Marshal.ReadInt16(record, 40) != PresentEventWin11) return;
                 int pid = Marshal.ReadInt32(record, 12);
                 if (pid != _targetPid || _targetPid == 0) return;
                 long ts = Marshal.ReadInt64(record, 16);
@@ -229,9 +234,33 @@ namespace NvTgpHold
         {
             public uint BufferSize, Version; public uint ProviderVersion, NumberOfProcessors; public long EndTime;
             public uint TimerResolution, MaximumFileSize, LogFileMode, BuffersWritten; public Guid LogInstanceGuid;
-            public IntPtr LoggerName, LogFileName; public long TimeZone1, TimeZone2; public long BootTime, PerfFreq, StartTime;
+            public IntPtr LoggerName, LogFileName;
+            public TIME_ZONE_INFORMATION TimeZone;
+            public long BootTime, PerfFreq, StartTime;
             public uint ReservedFlags, BuffersLost;
         }
+
+        // evntrace.h embeds the entire winbase.h time-zone structure (172 bytes), including both names/dates.
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct TIME_ZONE_INFORMATION
+        {
+            public int Bias;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string StandardName;
+            public SYSTEMTIME StandardDate;
+            public int StandardBias;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string DaylightName;
+            public SYSTEMTIME DaylightDate;
+            public int DaylightBias;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SYSTEMTIME { public ushort Year, Month, DayOfWeek, Day, Hour, Minute, Second, Milliseconds; }
+
+        internal static bool NativeLayoutValid => IntPtr.Size == 8 &&
+            Marshal.SizeOf<TIME_ZONE_INFORMATION>() == 172 && Marshal.SizeOf<TRACE_LOGFILE_HEADER>() == 280 &&
+            Marshal.SizeOf<EVENT_TRACE_LOGFILE>() == 448 &&
+            Marshal.OffsetOf<EVENT_TRACE_LOGFILE>(nameof(EVENT_TRACE_LOGFILE.EventRecordCallback)).ToInt64() == 424 &&
+            Marshal.OffsetOf<EVENT_TRACE_LOGFILE>(nameof(EVENT_TRACE_LOGFILE.Context)).ToInt64() == 440;
 
         [DllImport("advapi32.dll", CharSet = CharSet.Unicode, EntryPoint = "StartTraceW")]
         private static extern int StartTrace(out ulong handle, string name, IntPtr props);

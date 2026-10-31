@@ -76,6 +76,7 @@ namespace NvTgpHold
         public bool SmuTuning;             // experimental: apply the profile's CPU temp limit + undervolt (Ryzen SMU)
         public string FanProfile = "";     // standalone fan curve override (FanProfiles name), "" = follow the power profile
         public bool GpuOptimized;          // GPU display mode "Optimized": Standard on AC, Eco on battery
+        public bool Overlay;               // show the G-Helper-style hardware telemetry OSD
 
         public static Settings Parse(IEnumerable<string> lines)
         {
@@ -98,6 +99,7 @@ namespace NvTgpHold
                     case "smutuning": s.SmuTuning = v == "1"; break;
                     case "fanprofile": s.FanProfile = FanProfiles.Find(v)?.Name ?? ""; break;
                     case "gpuoptimized": s.GpuOptimized = v == "1"; break;
+                    case "overlay": s.Overlay = v == "1"; break;
                 }
             }
             return s;
@@ -115,6 +117,7 @@ namespace NvTgpHold
             "smutuning=" + (SmuTuning ? "1" : "0"),
             "fanprofile=" + FanProfile,
             "gpuoptimized=" + (GpuOptimized ? "1" : "0"),
+            "overlay=" + (Overlay ? "1" : "0"),
         };
     }
 

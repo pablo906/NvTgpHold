@@ -93,8 +93,9 @@ namespace NvTgpHold
             else if (CpuInfo.StrixPoint && CpuProfiles.Find(_settings.CpuProfile) != null) SetCpuProfile(CpuProfiles.Find(_settings.CpuProfile));
             if (_profile == null && _fanProfile != null) ReapplyFanProfile();   // fan override with no power profile active
             ApplyOptimizedEco("startup");
+            if (_settings.Overlay) OverlayOsd.Show();
             Refresh();
-            Application.ApplicationExit += (s, e) => { RestorePrior("exit"); BoostMode.RestorePrior(); StopEcHold(exiting: true); RyzenSmu.Close(); if (_tray != null) _tray.Visible = false; };
+            Application.ApplicationExit += (s, e) => { RestorePrior("exit"); BoostMode.RestorePrior(); StopEcHold(exiting: true); RyzenSmu.Close(); OverlayOsd.Hide(); if (_tray != null) _tray.Visible = false; };
             Application.Run();
         }
 
@@ -175,6 +176,9 @@ namespace NvTgpHold
             };
             _profileMenu.DropDownItems.Add(gm);
             m.Items.Add(_profileMenu);
+            var overlay = new ToolStripMenuItem("Show hardware overlay (G-Helper style)") { Checked = _settings.Overlay, CheckOnClick = true, ToolTipText = "Layered GPU/CPU telemetry OSD (temp, power, usage, fan), top-left corner." };
+            overlay.CheckedChanged += (s, e) => { _settings.Overlay = overlay.Checked; SettingsStore.Save(_settings); if (overlay.Checked) OverlayOsd.Show(); else OverlayOsd.Hide(); };
+            m.Items.Add(overlay);
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add(new ToolStripMenuItem("Run firmware / driver test", null, (s, e) => RunTest()));
             m.Items.Add(new ToolStripMenuItem("Load vBIOS dump...", null, (s, e) => LoadVbiosDump()));

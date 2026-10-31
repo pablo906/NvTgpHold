@@ -57,7 +57,7 @@ These are **off by default and opt-in**, each behind a consent dialog, like the 
 ladder hold. They are under **Power profile → Experimental expansions**.
 
 - **GPU overclock** (NvAPI public clock domains). The **GPU overclock** picker applies a
-  core offset (25 MHz steps, 100-300), a memory offset (300-3000 in set steps), or a
+  core offset (25 MHz steps, 100-300), a memory offset (300-2000 in set steps), or a
   video-clock offset (100-300) immediately; or the "Apply GPU OC from profile" toggle
   applies the active profile's core/memory offsets (NvTgpHold-Manual is +100 core /
   +1000 memory). Offsets reset on reboot and "0" clears them. Nothing is flashed. Too

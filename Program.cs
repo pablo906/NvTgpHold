@@ -145,7 +145,9 @@ namespace NvTgpHold
             ocPick.DropDownItems.Add(coreMenu); _gpuCoreMenu = coreMenu;
             var memMenu = new ToolStripMenuItem("Memory offset");
             memMenu.DropDownItems.Add(new ToolStripMenuItem("0 (off)", null, (s, e) => SetGpuMem(0)) { Tag = 0 });
-            foreach (int mhz in new[] { 300, 500, 750, 1000, 1500, 2000, 2500, 3000 }) { int mm = mhz; memMenu.DropDownItems.Add(new ToolStripMenuItem("+" + mhz + " MHz", null, (s, e) => SetGpuMem(mm)) { Tag = mhz }); }
+            // Offer only offsets accepted by SetClocks; an impossible choice also poisoned later core changes
+            // because the rejected memory request remained in _gpuMem.
+            foreach (int mhz in new[] { 300, 500, 750, 1000, 1500, 2000 }) { int mm = mhz; memMenu.DropDownItems.Add(new ToolStripMenuItem("+" + mhz + " MHz", null, (s, e) => SetGpuMem(mm)) { Tag = mhz }); }
             ocPick.DropDownItems.Add(memMenu); _gpuMemMenu = memMenu;
             var videoMenu = new ToolStripMenuItem("Video clock offset");
             videoMenu.DropDownItems.Add(new ToolStripMenuItem("0 (off)", null, (s, e) => SetGpuVideo(0)) { Tag = 0 });

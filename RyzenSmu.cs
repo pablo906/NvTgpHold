@@ -62,6 +62,9 @@ namespace NvTgpHold
         {
             ret = UIntPtr.Zero;
             var m = PciLock();
+            // Failing to create/open the shared mutex must fail closed just like acquisition timeout.
+            // A private monitor cannot protect PCI index/data transactions from other processes.
+            if (m == null) return PciBusy;
             bool held = false;
             try
             {
@@ -150,19 +153,23 @@ namespace NvTgpHold
             return Execute("ioctl_write_smu_register", _in2, (UIntPtr)2, null, UIntPtr.Zero, out _) >= 0;
         }
 
-        // SMU mailbox: wait ready, clear response, write the six arg words, write the command, poll the response.
+        // SMU mailbox: wait ready, stage all six args, clear response, submit the command, poll the response.
         // Returns the SMU status byte (0x01 = OK) or -1 on a transport failure.
         private static int Mailbox(uint msg, uint arg0, out string detail)
         {
             detail = "";
             if (!Open(out detail)) return -1;
             if (!WaitResponse(out _, 200)) { detail = "mailbox not ready"; return -1; }
-            if (!WriteReg(RspAddr, 0)) { detail = "clear rsp failed"; return -1; }
             // Every argument register must land before the command is submitted: a failed arg write left the SMU
             // reading a stale/zero argument, yet the command would still go out and could return OK, applying the
             // wrong value. Abort if any of the six arg writes fails so no command is issued on bad arguments.
             if (!WriteReg(ArgAddr, arg0)) { detail = "write arg0 failed"; return -1; }
             for (uint i = 1; i < 6; i++) if (!WriteReg(ArgAddr + i * 4, 0)) { detail = "write arg" + i + " failed"; return -1; }
+            // Firmware consumes args when the command is submitted. Keep the previous ready response until
+            // staging succeeds, so an argument transport error doesn't strand later requests at response == 0.
+            if (!WriteReg(RspAddr, 0)) { detail = "clear rsp failed"; return -1; }
+            // Once submission is attempted its outcome may be unknown on transport failure. Do not fabricate a
+            // ready response: firmware could be processing the request. A later call must observe real readiness.
             if (!WriteReg(CmdAddr, msg)) { detail = "write cmd failed"; return -1; }
             if (!WaitResponse(out uint st, 200)) { detail = "no response"; return -1; }
             return (int)st;

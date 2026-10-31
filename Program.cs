@@ -482,8 +482,10 @@ namespace NvTgpHold
             bool ocCleared = ApplyGpuClocks(0, 0, out string ocReset);
             bool videoCleared = true; string videoReset = "";
             if (_gpuVideo != 0) { videoCleared = NvOc.SetVideoClock(0, out videoReset); if (videoCleared) _gpuVideo = 0; }
-            bool sysXbarCleared = true; string sysXbarReset = "";
-            if (NvSysXbar.NeedsReset) { sysXbarCleared = NvSysXbar.SetLinkedOffset(0, out sysXbarReset); _gpuSysXbar = sysXbarCleared ? 0 : (int?)null; }
+            // Driver offsets survive exiting/crashing this process. Restore must not trust session-local
+            // NeedsReset: after relaunch it is false even if the previous instance left an offset active.
+            bool sysXbarCleared = NvSysXbar.SetLinkedOffset(0, out string sysXbarReset);
+            _gpuSysXbar = sysXbarCleared ? 0 : (int?)null;
             _fanProfile = null; _settings.FanProfile = ""; _settings.GpuOptimized = false;
             SettingsStore.Save(_settings); BoostMode.RestorePrior(); _cpuNote = "";
             _sync = "";

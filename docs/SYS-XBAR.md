@@ -28,6 +28,9 @@ and changes only their two frequency deltas. It preserves all other bytes,
 including voltage offsets. A fresh readback must confirm both requested offsets;
 a partial or ambiguous result leaves no checked selection. It retains reset
 eligibility until a zero pair is confirmed, including after a failed setter call.
+Restore defaults always requests a verified zero pair, including after relaunching
+the application. It reports failure if the private interface is unavailable; it
+does not infer zero offsets from a new process's empty history.
 
 Automatic rollback with a stale full-buffer snapshot could overwrite another
 utility's intervening changes, so it is deliberately avoided. Request zero again

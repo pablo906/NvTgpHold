@@ -233,6 +233,25 @@ retry counts. A reported step 0 is an observation, not proof that no collision
 occurred. Uncheck the item to stop, or use Restore defaults. An in-flight slot can
 finish before the worker observes cancellation. See the [technical reference](EC-Ladder.md).
 
+## Hardware overlay
+
+Enable **Show hardware overlay (G-Helper style)** in the tray menu for a top-left,
+click-through panel. The choice is saved and restored on launch. Turn the same
+item off to close it. The overlay collects telemetry; it does not change power
+limits, fan curves or the active hold.
+
+GPU temperature, power and usage come from NVIDIA; CPU usage comes from Windows.
+Fan speeds use ASUS ATK readings. CPU temperature is the available ACPI thermal
+zone (preferably THRM), not a verified CPU-die sensor; CPU/APU power uses the
+Windows Energy Meter when available. Missing sensors show placeholders.
+
+FPS is experimental and counts DirectX kernel present events for the foreground
+application. It is not a measurement of displayed frames or frame latency, and
+may be unavailable for some applications. The desktop window is not an injected
+game overlay; exclusive fullscreen can obscure it. NVIDIA collection pauses
+during an application-managed GPU restart. Live fullscreen/FPS accuracy and
+long-running sensor behavior have not been validated.
+
 ## Stop, restore and exit
 
 | Action | Effect |
@@ -248,7 +267,7 @@ restart or reboot is needed to reload MAX after override removal. See
 ## Saved settings and other utilities
 
 `%ProgramData%\NvTgpHold\settings.txt` stores auto re-assert, its interval, CPU
-profile, Efficient Enabled selection and EC-hold opt-in. The GPU CURRENT target
+profile, Efficient Enabled selection, EC-hold opt-in and overlay visibility. The GPU CURRENT target
 and Dynamic Boost/sync menu choices are not persisted. A saved CPU profile or EC
 hold resumes on launch when its hardware checks pass.
 

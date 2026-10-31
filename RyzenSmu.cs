@@ -116,8 +116,11 @@ namespace NvTgpHold
             if (!Open(out detail)) return -1;
             if (!WaitResponse(out _, 200)) { detail = "mailbox not ready"; return -1; }
             if (!WriteReg(RspAddr, 0)) { detail = "clear rsp failed"; return -1; }
-            WriteReg(ArgAddr, arg0);
-            for (uint i = 1; i < 6; i++) WriteReg(ArgAddr + i * 4, 0);
+            // Every argument register must land before the command is submitted: a failed arg write left the SMU
+            // reading a stale/zero argument, yet the command would still go out and could return OK, applying the
+            // wrong value. Abort if any of the six arg writes fails so no command is issued on bad arguments.
+            if (!WriteReg(ArgAddr, arg0)) { detail = "write arg0 failed"; return -1; }
+            for (uint i = 1; i < 6; i++) if (!WriteReg(ArgAddr + i * 4, 0)) { detail = "write arg" + i + " failed"; return -1; }
             if (!WriteReg(CmdAddr, msg)) { detail = "write cmd failed"; return -1; }
             if (!WaitResponse(out uint st, 200)) { detail = "no response"; return -1; }
             return (int)st;

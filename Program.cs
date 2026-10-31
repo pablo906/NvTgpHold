@@ -201,7 +201,7 @@ namespace NvTgpHold
                 }
                 m.Items.Add(_cpuMenu);
             }
-            m.Items.Add(new ToolStripMenuItem("Stop holding", null, (s, e) => { _holdTargetW = 0; _holdTimer.Stop(); RestorePrior("hold released"); _last = "hold released"; Refresh(); }));
+            m.Items.Add(new ToolStripMenuItem("Stop holding", null, (s, e) => { _holdTargetW = 0; _holdTimer.Stop(); RestorePrior("hold released"); ReturnGpuToProfile(); _last = "hold released"; Refresh(); }));
             m.Items.Add(new ToolStripMenuItem("Restore defaults (95 + 25 stock)", null, (s, e) => DoRestore()));
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add(new ToolStripMenuItem("Exit", null, (s, e) => Application.Exit()));
@@ -255,6 +255,18 @@ namespace NvTgpHold
             bool ok = TgpSync.Restore(_priorPower, AtkAcpi.ReadGpuPower, WriteGpuPower, out string note);
             _sync = note + " (" + why + ")";
             if (ok) _priorPower = -1; else Balloon(_sync);
+            _gpuPower = AtkAcpi.ReadGpuPower();
+        }
+
+        // A CURRENT hold turns Dynamic Boost off and owns the NVPCF added power while it runs. When the hold ends and a
+        // full profile owns the GPU, hand both settings back: RestorePrior put the added power back, but the profile's
+        // Dynamic Boost must be re-applied or it stays at the hold's 0 W until the profile is re-selected or a
+        // power/resume event fires. Re-assert the added power too so the pair matches the profile.
+        private static void ReturnGpuToProfile()
+        {
+            if (_profile == null || GpuGuard.Restarting) return;
+            AtkAcpi.SetBoost(_profile.GpuBoost, out _);
+            AtkAcpi.SetGpuPower(_profile.GpuPower, out _);
             _gpuPower = AtkAcpi.ReadGpuPower();
         }
 
@@ -439,6 +451,12 @@ namespace NvTgpHold
         {
             _cpu = p;
             _settings.CpuProfile = p?.Name ?? "";
+            // The CPU menu and a full power profile both drive CPU PPT. A full profile reapplies its own
+            // SPL/SPPT/FPPT on every power/resume/startup, which would silently overwrite this standalone
+            // choice (or a CPU Off). Give CPU PPT a single owner: choosing from the CPU menu hands the
+            // machine back to manual control, so deactivate any active full profile (it leaves the rest of
+            // the hardware at its last-applied values, same as selecting profile Off).
+            if (_profile != null) { _profile = null; _settings.Profile = ""; _profileNote = "profile off (CPU menu took over)"; }
             SettingsStore.Save(_settings);
             if (p == null) { BoostMode.RestorePrior(); _cpuNote = "CPU off"; }
             else ApplyCpu("profile");

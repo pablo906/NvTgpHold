@@ -338,6 +338,7 @@ namespace NvTgpHold
 
         private static void DoHold(int watts)
         {
+            if (GpuGuard.Restarting) return;
             if (!double.IsNaN(_max) && watts > (int)Math.Floor(_max + 0.01)) { Balloon("Target " + watts + " W exceeds live MAX " + _max.ToString("0") + " W. Set MAX higher first (reboot)."); return; }
             bool ok = ApplyHeldCurrent(watts, "hold", out bool currentApplied, out string detail);
             if (currentApplied) { _holdTargetW = watts; _drifts = 0; _lastReassert = DateTime.UtcNow; _holdTimer.Start(); }

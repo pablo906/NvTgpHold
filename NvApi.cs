@@ -308,6 +308,26 @@ namespace NvTgpHold
     internal static class GpuGuard
     {
         public static volatile bool Restarting;
+
+        // The overlay poller is the one NVIDIA caller on its own thread, so checking Restarting is not enough: a query
+        // can start just before Restarting is set and still be in flight when the device is disabled. Its GPU query runs
+        // inside RunGpuQuery, and RestartGpu calls DrainGpuQueries after setting Restarting, so a restart both blocks new
+        // queries and waits for an in-flight one to finish before it begins. Non-reentrant; no other lock is taken under it.
+        private static readonly object _gpuQueryGate = new object();
+
+        // Runs the overlay's GPU query unless a restart is active or begins first; returns false (query skipped) then.
+        public static bool RunGpuQuery(Action query)
+        {
+            lock (_gpuQueryGate)
+            {
+                if (Restarting) return false;
+                query();
+                return true;
+            }
+        }
+
+        // Blocks until no overlay GPU query is in flight. Call only after setting Restarting, so no new query can start.
+        public static void DrainGpuQueries() { lock (_gpuQueryGate) { } }
     }
 
     internal static class PowerProbe

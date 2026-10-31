@@ -436,6 +436,7 @@ namespace NvTgpHold
             bool holdTimerWasOn = _holdTimer.Enabled;
             _displayTimer.Stop(); _autoTimer.Stop(); _holdTimer.Stop();
             GpuGuard.Restarting = true;
+            GpuGuard.DrainGpuQueries();   // wait for any in-flight overlay GPU query (its own thread) to finish before the device is disabled
             var work = System.Threading.Tasks.Task.Run(() =>
             {
                 double m = double.NaN;

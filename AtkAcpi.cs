@@ -18,6 +18,8 @@ namespace NvTgpHold
     {
         private const uint BoostId = 0x001200C0u, GpuPowerId = 0x00120098u, GpuBaseId = 0x00120099u;
         private const uint CpuSplId = 0x001200A3u, CpuSpptId = 0x001200A0u, CpuFpptId = 0x001200C1u;
+        private const uint PerfModeId = 0x00120075u, GpuTempId = 0x001200C2u;              // ASUS platform mode, NVIDIA GPU temp target
+        private const uint CpuFanCurveId = 0x00110024u, GpuFanCurveId = 0x00110025u;       // DevsCPUFanCurve / DevsGPUFanCurve (G-Helper)
         private const uint Devs = 0x53564544u, Dsts = 0x53545344u; // "DEVS", "DSTS"
 
         [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -45,6 +47,65 @@ namespace NvTgpHold
                 }
             }
             catch (Exception ex) { detail = "ATK exception: " + ex.Message; return false; }
+        }
+
+        // Sends one ATK method call whose argument is a device id followed by a byte blob (used for the fan curve, which
+        // is a 16-byte package rather than a single dword). Same IOCTL/layout as Call, with a variable-length arg block.
+        private static bool CallBytes(uint method, uint device, byte[] data, out uint result, out string detail)
+        {
+            result = 0; detail = "";
+            try
+            {
+                using (var handle = CreateFile(@"\\.\ATKACPI", 0xC0000000u, 3u, IntPtr.Zero, 3u, 0u, IntPtr.Zero))
+                {
+                    if (handle.IsInvalid) { detail = "ATKACPI open failed: " + new Win32Exception(Marshal.GetLastWin32Error()).Message; return false; }
+                    uint argLen = (uint)(4 + data.Length);                 // device dword + the blob
+                    byte[] input = new byte[8 + 4 + data.Length];          // method, argLen, device, data
+                    BitConverter.GetBytes(method).CopyTo(input, 0);
+                    BitConverter.GetBytes(argLen).CopyTo(input, 4);
+                    BitConverter.GetBytes(device).CopyTo(input, 8);
+                    Buffer.BlockCopy(data, 0, input, 12, data.Length);
+                    byte[] output = new byte[16];
+                    if (!DeviceIoControl(handle, 0x22240Cu, input, (uint)input.Length, output, 16u, out uint count, IntPtr.Zero))
+                    { detail = "DeviceIoControl failed: " + new Win32Exception(Marshal.GetLastWin32Error()).Message; return false; }
+                    if (count < 4) { detail = "short ATK reply"; return false; }
+                    result = BitConverter.ToUInt32(output, 0);
+                    return true;
+                }
+            }
+            catch (Exception ex) { detail = "ATK exception: " + ex.Message; return false; }
+        }
+
+        // ASUS platform throttle/thermal policy (Balanced 0, Turbo 1, Silent 2). Set first so the EC loads that mode's
+        // baseline before the fan curve and limits below override it, matching G-Helper's apply order.
+        public static bool SetMode(int mode, out string detail)
+        {
+            if (!Call(Devs, PerfModeId, (uint)mode, out uint r, out detail)) return false;
+            detail = "mode " + mode + " (r=" + r + ")";
+            return true;
+        }
+
+        // NVIDIA GPU temperature target in C (G-Helper's gpu_temp -> PPT_GPUC2).
+        public static bool SetGpuTemp(int celsius, out string detail)
+        {
+            if (!Call(Devs, GpuTempId, (uint)celsius, out uint r, out detail)) return false;
+            if (r != 1) { detail = "ASUS rejected the GPU temp target"; return false; }
+            detail = "gpuTemp=" + celsius + "C";
+            return true;
+        }
+
+        // Writes a 16-byte fan curve (8 temps + 8 percents 0-100) through ATK, the same call G-Helper uses, rather than
+        // poking EC RAM directly - the EC serves one paced writer and ATK/AML is the supported path. gpu=false is the CPU
+        // fan. Percents are written as-is (G-Helper's fan_scale defaults to 100 = no scaling).
+        public static bool SetFanCurve(bool gpu, byte[] curve, out string detail)
+        {
+            detail = "";
+            if (curve == null || curve.Length != 16) { detail = "fan curve must be 16 bytes"; return false; }
+            bool allZero = true; foreach (byte b in curve) if (b != 0) { allZero = false; break; }
+            if (allZero) { detail = "fan curve is all zero"; return false; }
+            if (!CallBytes(Devs, gpu ? GpuFanCurveId : CpuFanCurveId, curve, out uint r, out detail)) return false;
+            detail = (gpu ? "gpuFan" : "cpuFan") + " set (r=" + r + ")";
+            return true;
         }
 
         public static bool SetBoost(int watts, out string detail)

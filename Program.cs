@@ -50,6 +50,9 @@ namespace NvTgpHold
         private static ToolStripMenuItem _ecMenu;
         private static Settings _settings = new Settings();
         private static CpuProfile _cpu;                     // active CPU profile, null = not asserting CPU limits
+        private static PowerProfile _profile;               // active full power profile (replaces G-Helper), null = off
+        private static ToolStripMenuItem _profileMenu;
+        private static string _profileNote = "";
         private static string _cpuNote = "", _autoNote = "", _ghelper = "";
         private static int _autoTicks = 0;
         private static DateTime _lastGhCheck = DateTime.MinValue;
@@ -76,9 +79,11 @@ namespace NvTgpHold
             if (_settings.Auto) _autoTimer.Start();
             _ui = System.Threading.SynchronizationContext.Current;
             if (_settings.EcLadder && EcLadder.Supported) StartEcHold();
-            SystemEvents.PowerModeChanged += (s, e) => { if (_holdTargetW > 0) Reassert("power " + e.Mode); ApplyCpu("power " + e.Mode); };
-            SystemEvents.SessionSwitch += (s, e) => { if (e.Reason != SessionSwitchReason.SessionUnlock) return; if (_holdTargetW > 0) Reassert("resume"); ApplyCpu("resume"); };
-            if (CpuInfo.StrixPoint && CpuProfiles.Find(_settings.CpuProfile) != null) SetCpuProfile(CpuProfiles.Find(_settings.CpuProfile));
+            SystemEvents.PowerModeChanged += (s, e) => { if (_holdTargetW > 0) Reassert("power " + e.Mode); if (_profile != null) ApplyProfile(_profile, "power " + e.Mode, full: true); else ApplyCpu("power " + e.Mode); };
+            SystemEvents.SessionSwitch += (s, e) => { if (e.Reason != SessionSwitchReason.SessionUnlock) return; if (_holdTargetW > 0) Reassert("resume"); if (_profile != null) ApplyProfile(_profile, "resume", full: true); else ApplyCpu("resume"); };
+            var savedProfile = PowerProfiles.Find(_settings.Profile);
+            if (savedProfile != null) { _profile = savedProfile; ApplyProfile(savedProfile, "startup", full: true); }
+            else if (CpuInfo.StrixPoint && CpuProfiles.Find(_settings.CpuProfile) != null) SetCpuProfile(CpuProfiles.Find(_settings.CpuProfile));
             Refresh();
             Application.ApplicationExit += (s, e) => { RestorePrior("exit"); BoostMode.RestorePrior(); StopEcHold(exiting: true); if (_tray != null) _tray.Visible = false; };
             Application.Run();
@@ -89,6 +94,13 @@ namespace NvTgpHold
             var m = new ContextMenuStrip { ShowItemToolTips = true };
             _status = new ToolStripMenuItem("(status)") { Enabled = false };
             m.Items.Add(_status);
+            m.Items.Add(new ToolStripSeparator());
+            _profileMenu = new ToolStripMenuItem("Power profile (replaces G-Helper)") { ToolTipText = ProfileTip };
+            _profileMenu.DropDownItems.Add(new ToolStripMenuItem("Off (stop managing)", null, (s, e) => SetProfile(null)) { Tag = "" });
+            foreach (var p in PowerProfiles.Presets) { var pp = p; _profileMenu.DropDownItems.Add(new ToolStripMenuItem(p.Name, null, (s, e) => SetProfile(pp)) { Tag = p.Name, ToolTipText = p.Summary }); }
+            _profileMenu.DropDownItems.Add(new ToolStripSeparator());
+            _profileMenu.DropDownItems.Add(new ToolStripMenuItem("Undervolt / GPU OC / GPU-mode: planned (experimental)") { Enabled = false, ToolTipText = ExpansionTip });
+            m.Items.Add(_profileMenu);
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add(new ToolStripMenuItem("Run firmware / driver test", null, (s, e) => RunTest()));
             m.Items.Add(new ToolStripMenuItem("Load vBIOS dump...", null, (s, e) => LoadVbiosDump()));
@@ -379,7 +391,7 @@ namespace NvTgpHold
             // Stock means the EC's own ladder too: stop the hold and don't resume it on next launch.
             StopEcHold(); _ecNote = ""; _settings.EcLadder = false;
             if (_ecMenu != null && _ecMenu.Checked) _ecMenu.Checked = false;
-            _cpu = null; _settings.CpuProfile = ""; SettingsStore.Save(_settings); BoostMode.RestorePrior(); _cpuNote = "";
+            _cpu = null; _settings.CpuProfile = ""; _profile = null; _settings.Profile = ""; _profileNote = ""; SettingsStore.Save(_settings); BoostMode.RestorePrior(); _cpuNote = "";
             _sync = "";
             _last = "restored to stock 95+25 (" + gpu + ")";
             Balloon("MAX: " + rm + "\nCURRENT->95: " + rc + "\nBoost->25 (on): " + rb + "\nNVPCF additional->0: " + rp);
@@ -406,6 +418,61 @@ namespace NvTgpHold
             if (ok && _settings.EfficientBoost && !BoostMode.Set(BoostMode.EfficientEnabled, out string bm)) detail += ", " + bm;
             _cpuNote = (ok ? detail : "CPU failed: " + detail) + " (" + why + ")";
             return ok;
+        }
+
+        private const string ProfileTip =
+            "A full profile mirrors one of G-Helper's modes so NvTgpHold can replace it: ASUS platform mode, CPU PPT\n" +
+            "(SPL/SPPT/FPPT), GPU added power + Dynamic Boost + temp target, and both fan curves - all through ASUS ATK.\n" +
+            "Values come from your own G-Helper config. Close G-Helper (and turn its Auto apply off) so the two don't fight.\n" +
+            "The CPU and GPU limits are re-asserted in the background like the holds; fan curves are re-sent on power/resume.";
+
+        private const string ExpansionTip =
+            "Not wired yet. CPU undervolt (Curve Optimizer) and GPU core/memory OC need an SMU / mVolt+-style primitive\n" +
+            "NvTgpHold doesn't have, and GPU-mode (Eco/Standard/Ultimate) switching needs a sign-out. These are planned as\n" +
+            "opt-in experimental expansions, like the EC ladder hold. The profile's undervolt value is stored but not applied.";
+
+        // Applies one full profile (or Off). Order mirrors G-Helper: ASUS mode first (EC loads its baseline), then the
+        // fan curves, then CPU PPT (reusing the existing re-assert path via _cpu), then GPU temp / boost / power. The GPU
+        // boost + added power are left to a CURRENT hold when one is active (the hold owns 0x98/boost and re-syncs them).
+        private static void SetProfile(PowerProfile p)
+        {
+            _profile = p;
+            _settings.Profile = p?.Name ?? "";
+            if (p == null)
+            {
+                // Stop managing: leave the hardware at the last-applied values, stop re-asserting CPU PPT.
+                _cpu = null; _settings.CpuProfile = ""; SettingsStore.Save(_settings);
+                _profileNote = "profile off"; Refresh(); return;
+            }
+            SettingsStore.Save(_settings);
+            ApplyProfile(p, "selected", full: true);
+        }
+
+        private static void ApplyProfile(PowerProfile p, string why, bool full)
+        {
+            if (p == null || GpuGuard.Restarting) return;
+            var notes = new System.Text.StringBuilder();
+            if (full)
+            {
+                AtkAcpi.SetMode(p.AsusMode, out string md); notes.Append(md);
+                System.Threading.Thread.Sleep(400);                 // let the mode's EC baseline settle before overriding it
+                bool cf = AtkAcpi.SetFanCurve(false, p.CpuFan, out string cfd);
+                bool gf = AtkAcpi.SetFanCurve(true, p.GpuFan, out string gfd);
+                notes.Append(", ").Append(cf ? cfd : "cpuFan FAIL: " + cfd).Append(", ").Append(gf ? gfd : "gpuFan FAIL: " + gfd);
+                _cpu = p.Cpu; _settings.CpuProfile = ""; SettingsStore.Save(_settings);   // profile drives PPT; clear the standalone CPU preset
+                ApplyCpu("profile");                                // SPL/SPPT/FPPT + (optional) efficient-boost, re-asserted by Auto
+            }
+            AtkAcpi.SetGpuTemp(p.GpuTemp, out string gt); notes.Append(full ? ", " + gt : gt);
+            if (_holdTargetW <= 0)
+            {
+                AtkAcpi.SetBoost(p.GpuBoost, out string bd);
+                AtkAcpi.SetGpuPower(p.GpuPower, out string pd);
+                notes.Append(", ").Append(bd).Append(", ").Append(pd);
+            }
+            else notes.Append(", GPU power/boost held by CURRENT hold");
+            _profileNote = "profile " + p.Name + ": " + notes + " (" + why + ")";
+            if (full) { _last = "profile " + p.Name + " applied"; if (why == "selected") Balloon(_profileNote); }
+            Refresh();
         }
 
         // Timer path: E633 at the hold value (the same call the firmware test uses as a no-op when nothing moved) and the
@@ -521,6 +588,10 @@ namespace NvTgpHold
             // At most once per 10 s so a write the BIOS rejects doesn't re-notify NVPCF every poll.
             else if (_syncTgp && _holdTargetW > 0 && (_gpuPower != TgpSync.Additional(_holdTargetW, _gpuBase, HoldBoost, MaxW, out _) || _sync.StartsWith("sync unavailable", StringComparison.Ordinal)) && (DateTime.UtcNow - _lastSync).TotalSeconds >= 10)
                 SyncTgp("was " + (_gpuPower < 0 ? "?" : _gpuPower + " W") + " " + DateTime.Now.ToString("HH:mm:ss"));
+            // A profile's GPU added power drifted (an ASUS/EC mode change, Armoury) and no CURRENT hold owns 0x98: put it
+            // back. Only writes on an actual mismatch, so NVPCF isn't re-notified every poll.
+            if (_profile != null && _holdTargetW <= 0 && _gpuPower >= 0 && _gpuPower != _profile.GpuPower)
+            { AtkAcpi.SetGpuPower(_profile.GpuPower, out _); _gpuPower = AtkAcpi.ReadGpuPower(); }
             // Something else (driver, EC, ASUS services) pulled the enforced limit down: put it back now rather than
             // waiting for the 5-min tick. At most once per 2 s so a write that won't stick doesn't spin.
             if (_holdTargetW > 0 && !double.IsNaN(_enf) && _enf < _holdTargetW - 1 && (DateTime.UtcNow - _lastReassert).TotalSeconds >= 2)
@@ -541,8 +612,9 @@ namespace NvTgpHold
             string mx = double.IsNaN(_max) ? "?" : _max.ToString("0", CultureInfo.InvariantCulture);
             string hold = _holdTargetW > 0 ? ("HOLD " + _holdTargetW + " W") : "hold off";
             string nv = (_gpuBase >= 0 ? _gpuBase.ToString(CultureInfo.InvariantCulture) : "?") + "+" + (_gpuPower >= 0 ? _gpuPower.ToString(CultureInfo.InvariantCulture) : "?");
-            string extra = (_cpuNote.Length > 0 ? "  |  " + _cpuNote : "") + (_ecNote.Length > 0 ? "  |  " + _ecNote : "") + (_settings.Auto ? "  |  every " + _settings.IntervalS + " s" + (_autoNote.Length > 0 ? ", " + _autoNote : "") : "") + (_ghelper.Length > 0 ? "  |  " + _ghelper : "");
+            string extra = (_profile != null ? "  |  [" + _profile.Name + "]" : "") + (_profileNote.Length > 0 && _profile == null ? "  |  " + _profileNote : "") + (_cpuNote.Length > 0 ? "  |  " + _cpuNote : "") + (_ecNote.Length > 0 ? "  |  " + _ecNote : "") + (_settings.Auto ? "  |  every " + _settings.IntervalS + " s" + (_autoNote.Length > 0 ? ", " + _autoNote : "") : "") + (_ghelper.Length > 0 ? "  |  " + _ghelper : "");
             if (_status != null) _status.Text = hold + "  |  enf " + enf + " / max " + mx + " W  |  NVPCF " + nv + " W" + (_sync.Length > 0 ? " (" + _sync + ")" : "") + "  |  " + _last + extra;
+            if (_profileMenu != null) foreach (ToolStripItem it in _profileMenu.DropDownItems) if (it is ToolStripMenuItem mi && mi.Tag is string tag) mi.Checked = tag == (_profile?.Name ?? "");
             if (_intervalMenu != null) foreach (ToolStripMenuItem it in _intervalMenu.DropDownItems) it.Checked = (int)it.Tag == _settings.IntervalS;
             if (_cpuMenu != null) foreach (ToolStripItem it in _cpuMenu.DropDownItems) if (it is ToolStripMenuItem mi && !mi.CheckOnClick) mi.Checked = (mi.Tag as string) == (_cpu?.Name) || (mi.Tag == null && _cpu == null);
             if (_holdMenu != null) foreach (ToolStripMenuItem it in _holdMenu.DropDownItems) it.Checked = (_holdTargetW > 0 && it.Text == _holdTargetW + " W");

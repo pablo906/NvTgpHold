@@ -1,0 +1,90 @@
+using Xunit;
+
+namespace NvTgpHold.Tests
+{
+    public class ProfilesTests
+    {
+        [Fact]
+        public void Fan_curves_are_16_bytes_and_not_all_zero()
+        {
+            foreach (var p in PowerProfiles.Presets)
+            {
+                Assert.Equal(16, p.CpuFan.Length);
+                Assert.Equal(16, p.GpuFan.Length);
+                Assert.Contains(p.CpuFan, b => b != 0);   // SetFanCurve rejects an all-zero curve
+                Assert.Contains(p.GpuFan, b => b != 0);
+            }
+        }
+
+        [Fact]
+        public void Fan_curve_temperatures_are_non_decreasing()
+        {
+            foreach (var p in PowerProfiles.Presets)
+                for (int i = 1; i < 8; i++)
+                {
+                    Assert.True(p.CpuFan[i] >= p.CpuFan[i - 1], p.Name + " cpu temps");
+                    Assert.True(p.GpuFan[i] >= p.GpuFan[i - 1], p.Name + " gpu temps");
+                }
+        }
+
+        [Fact]
+        public void Fan_curve_percents_are_within_0_100()
+        {
+            foreach (var p in PowerProfiles.Presets)
+                for (int i = 8; i < 16; i++)
+                {
+                    Assert.InRange(p.CpuFan[i], 0, 100);
+                    Assert.InRange(p.GpuFan[i], 0, 100);
+                }
+        }
+
+        [Fact]
+        public void Ppt_keeps_fast_ge_slow_ge_sustained_within_bounds()
+        {
+            foreach (var p in PowerProfiles.Presets)
+            {
+                Assert.True(p.Fppt >= p.Sppt && p.Sppt >= p.Spl, p.Name);   // SetCpuPpt expects fast >= slow >= sustained
+                Assert.InRange(p.Spl, CpuProfiles.MinW, CpuProfiles.MaxW);
+                Assert.InRange(p.Fppt, CpuProfiles.MinW, CpuProfiles.MaxW);
+            }
+        }
+
+        [Fact]
+        public void Asus_modes_are_balanced_turbo_or_silent()
+        {
+            foreach (var p in PowerProfiles.Presets) Assert.InRange(p.AsusMode, 0, 2);
+            Assert.Equal(2, PowerProfiles.Find("Silent").AsusMode);
+            Assert.Equal(0, PowerProfiles.Find("Balanced").AsusMode);
+            Assert.Equal(1, PowerProfiles.Find("Turbo").AsusMode);
+        }
+
+        [Fact]
+        public void Matches_joses_ghelper_config_values()
+        {
+            var silent = PowerProfiles.Find("Silent");
+            Assert.Equal((28, 45, 65), (silent.Spl, silent.Sppt, silent.Fppt));   // limit_total/slow/fast mode 2
+            Assert.Equal((0, 5, 85), (silent.GpuPower, silent.GpuBoost, silent.GpuTemp));
+
+            var turbo = PowerProfiles.Find("Turbo");
+            Assert.Equal((35, 45, 55), (turbo.Spl, turbo.Sppt, turbo.Fppt));       // mode 1
+            Assert.Equal((70, 25, 87), (turbo.GpuPower, turbo.GpuBoost, turbo.GpuTemp));
+        }
+
+        [Fact]
+        public void Find_is_case_insensitive_and_null_safe()
+        {
+            Assert.NotNull(PowerProfiles.Find("balanced"));
+            Assert.Null(PowerProfiles.Find("nope"));
+            Assert.Null(PowerProfiles.Find(""));
+            Assert.Null(PowerProfiles.Find(null));
+        }
+
+        [Fact]
+        public void Settings_round_trip_the_profile()
+        {
+            var back = Settings.Parse(new Settings { Profile = "Turbo" }.Serialize());
+            Assert.Equal("Turbo", back.Profile);
+            Assert.Equal("", Settings.Parse(new[] { "profile=bogus" }).Profile);   // unknown name rejected
+        }
+    }
+}

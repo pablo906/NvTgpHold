@@ -20,6 +20,37 @@ double-click it to refresh status. Read [Safety](Safety.md) before changing limi
 The EC hold is optional and independent. Leave it disabled unless you understand
 and accept its [additional risks](#experimental-ec-cpu-ladder-hold).
 
+## Power profiles (replacing G-Helper)
+
+**Power profile** applies a full set of limits in one click, so the tool can stand
+in for G-Helper. Each profile sets, through ASUS ATK (the same calls G-Helper uses,
+not direct EC writes): the ASUS platform mode, CPU PPT (SPL / SPPT / FPPT), GPU
+added power, Dynamic Boost, GPU temperature target, and the CPU and GPU fan curves.
+Values come from the owner's own G-Helper config.
+
+| Profile | ASUS mode | CPU SPL/SPPT/FPPT | GPU added / boost / temp |
+|---|---|---|---|
+| Silent | Silent | 28 / 45 / 65 W | +0 W / 5 W / 85 °C |
+| Balanced | Balanced | 35 / 50 / 65 W | +15 W / 25 W / 85 °C |
+| Turbo | Turbo | 35 / 45 / 55 W | +70 W / 25 W / 87 °C |
+| NvTgpHold-Manual | Turbo base | 35 / 50 / 65 W | +70 W / 25 W / 87 °C |
+
+Apply order mirrors G-Helper: the ASUS mode first (so the EC loads that mode's
+baseline), then the fan curves, then CPU PPT, then GPU temp / boost / power — GPU
+power is written last so an NVPCF recompute from the earlier calls does not leave it
+low. CPU PPT is re-asserted in the background like the holds; GPU added power is put
+back if it drifts; fan curves are re-sent on power and resume events. A GPU **Hold
+CURRENT**, if active, owns the GPU power and boost while the profile owns the rest.
+
+Close G-Helper and turn off its **Auto apply** power option first, or the two will
+overwrite each other. The active profile and its CPU limits are restored on launch.
+
+Undervolt (Curve Optimizer), GPU core/memory OC and GPU-mode (Eco/Standard/Ultimate)
+switching are **planned experimental expansions**, not yet wired: they need an SMU /
+mVolt+-style primitive the tool does not have, and a sign-out for the GPU mode. A
+profile stores its undervolt value but does not apply it. Do not run the experimental
+EC CPU ladder hold at the same time as a profile — both can touch the EC fan state.
+
 ## GPU limits and status
 
 | Term | Meaning |

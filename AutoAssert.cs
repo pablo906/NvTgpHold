@@ -71,6 +71,7 @@ namespace NvTgpHold
         public string CpuProfile = "";     // "" = off
         public bool EfficientBoost = true;
         public bool EcLadder;              // hold the EC CPU ladder at step 0 (GA403WW BIOS 312 only)
+        public string Profile = "";        // active full power profile (PowerProfiles name), "" = off
 
         public static Settings Parse(IEnumerable<string> lines)
         {
@@ -88,6 +89,7 @@ namespace NvTgpHold
                     case "cpu": s.CpuProfile = CpuProfiles.Find(v)?.Name ?? ""; break;
                     case "effboost": s.EfficientBoost = v != "0"; break;
                     case "ecladder": s.EcLadder = v == "1"; break;
+                    case "profile": s.Profile = PowerProfiles.Find(v)?.Name ?? ""; break;
                 }
             }
             return s;
@@ -100,6 +102,7 @@ namespace NvTgpHold
             "cpu=" + CpuProfile,
             "effboost=" + (EfficientBoost ? "1" : "0"),
             "ecladder=" + (EcLadder ? "1" : "0"),
+            "profile=" + Profile,
         };
     }
 

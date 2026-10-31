@@ -24,6 +24,7 @@ See [Installation](docs/Installation.md) for upgrading and optional startup task
 
 | Feature | Purpose |
 |---|---|
+| Power profiles | Apply a full profile (ASUS mode, CPU PPT, GPU power / boost / temp target, CPU + GPU fan curves) through ASUS ATK, so NvTgpHold can replace G-Helper. Presets mirror the owner's Silent / Balanced / Turbo modes plus a Manual-like one; limits and fans are re-asserted in the background. |
 | Hold CURRENT | Set the enforced GPU power limit and re-apply it after detected drops and power events. |
 | Set MAX ceiling | Save a persistent ceiling override; apply it with an offered GPU restart or a reboot. A vBIOS dump is read once to locate the field; nothing is flashed. |
 | NVPCF sync | Match the ASUS platform power setting to the hold target, with readback and prior-value restoration. |

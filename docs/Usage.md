@@ -240,10 +240,26 @@ click-through panel. The choice is saved and restored on launch. Turn the same
 item off to close it. The overlay collects telemetry; it does not change power
 limits, fan curves or the active hold.
 
-GPU temperature, power and usage come from NVIDIA; CPU usage comes from Windows.
+The overlay has four modes, chosen under **Overlay mode** in the tray menu or by
+holding **Ctrl+Shift+Alt** and left-clicking the overlay (it is click-through the rest
+of the time) to step through them. The mode is saved.
+
+| Mode | Shows |
+|---|---|
+| Light | FPS, GPU/CPU temperature, power |
+| Default | Adds fan RPM, a 60-second stacked CPU/GPU power chart, and (only while unplugged) battery level with the signed charge/discharge rate |
+| Full | Adds usage % with a segmented bar |
+| Complete | Adds short GPU/CPU names and VRAM/RAM in GB with bars |
+
+The look is an independent re-implementation of G-Helper's overlay (Consolas, green
+GPU row over cyan CPU row, translucent rounded panel, top-left); no G-Helper code is
+used. It does not support dragging or repositioning, scaling, or per-column toggles.
+
+GPU temperature, power, usage and memory come from NVIDIA; CPU usage comes from Windows.
 Fan speeds use ASUS ATK readings. CPU temperature is the available ACPI thermal
 zone (preferably THRM), not a verified CPU-die sensor; CPU/APU power uses the
-Windows Energy Meter when available. Missing sensors show placeholders.
+Windows Energy Meter when available. The battery rate is read from the battery
+driver; its discharge sign has not been exercised live. Missing sensors show placeholders.
 
 FPS is experimental and counts DirectX kernel present events for the foreground
 application. It is not a measurement of displayed frames or frame latency, and
@@ -267,7 +283,7 @@ restart or reboot is needed to reload MAX after override removal. See
 ## Saved settings and other utilities
 
 `%ProgramData%\NvTgpHold\settings.txt` stores auto re-assert, its interval, CPU
-profile, Efficient Enabled selection, EC-hold opt-in and overlay visibility. The GPU CURRENT target
+profile, Efficient Enabled selection, EC-hold opt-in, overlay visibility and mode. The GPU CURRENT target
 and Dynamic Boost/sync menu choices are not persisted. A saved CPU profile or EC
 hold resumes on launch when its hardware checks pass.
 

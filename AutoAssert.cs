@@ -77,6 +77,7 @@ namespace NvTgpHold
         public string FanProfile = "";     // standalone fan curve override (FanProfiles name), "" = follow the power profile
         public bool GpuOptimized;          // GPU display mode "Optimized": Standard on AC, Eco on battery
         public bool Overlay;               // show the G-Helper-style hardware telemetry OSD
+        public int OverlayModeIndex = 1;   // 0 Light, 1 Default, 2 Full, 3 Complete (the OverlayMode enum)
 
         public static Settings Parse(IEnumerable<string> lines)
         {
@@ -100,6 +101,7 @@ namespace NvTgpHold
                     case "fanprofile": s.FanProfile = FanProfiles.Find(v)?.Name ?? ""; break;
                     case "gpuoptimized": s.GpuOptimized = v == "1"; break;
                     case "overlay": s.Overlay = v == "1"; break;
+                    case "overlaymode": if (int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out int om)) s.OverlayModeIndex = (int)OverlayLayout.FromInt(om, OverlayMode.Default); break;
                 }
             }
             return s;
@@ -118,6 +120,7 @@ namespace NvTgpHold
             "fanprofile=" + FanProfile,
             "gpuoptimized=" + (GpuOptimized ? "1" : "0"),
             "overlay=" + (Overlay ? "1" : "0"),
+            "overlaymode=" + OverlayModeIndex.ToString(CultureInfo.InvariantCulture),
         };
     }
 

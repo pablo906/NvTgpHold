@@ -15,6 +15,7 @@
     <Compile Include="../../ClockDomainLayout.cs" Link="ClockDomainLayout.cs" />
     <Compile Include="../../HoldApply.cs" Link="HoldApply.cs" />
     <Compile Include="../../EtwFpsMonitor.cs" Link="EtwFpsMonitor.cs" />
+    <Compile Include="../../OverlayLayout.cs" Link="OverlayLayout.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

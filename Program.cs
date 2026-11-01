@@ -93,6 +93,8 @@ namespace NvTgpHold
             else if (CpuInfo.StrixPoint && CpuProfiles.Find(_settings.CpuProfile) != null) SetCpuProfile(CpuProfiles.Find(_settings.CpuProfile));
             if (_profile == null && _fanProfile != null) ReapplyFanProfile();   // fan override with no power profile active
             ApplyOptimizedEco("startup");
+            OverlayOsd.Configure(OverlayLayout.FromInt(_settings.OverlayModeIndex, OverlayMode.Default),
+                m => { _settings.OverlayModeIndex = (int)m; SettingsStore.Save(_settings); });
             if (_settings.Overlay) OverlayOsd.Show();
             Refresh();
             Application.ApplicationExit += (s, e) => { RestorePrior("exit"); BoostMode.RestorePrior(); StopEcHold(exiting: true); RyzenSmu.Close(); OverlayOsd.Hide(); if (_tray != null) _tray.Visible = false; };
@@ -179,6 +181,11 @@ namespace NvTgpHold
             var overlay = new ToolStripMenuItem("Show hardware overlay (G-Helper style)") { Checked = _settings.Overlay, CheckOnClick = true, ToolTipText = "Layered GPU/CPU telemetry OSD (temp, power, usage, fan), top-left corner." };
             overlay.CheckedChanged += (s, e) => { _settings.Overlay = overlay.Checked; SettingsStore.Save(_settings); if (overlay.Checked) OverlayOsd.Show(); else OverlayOsd.Hide(); };
             m.Items.Add(overlay);
+            var overlayMode = new ToolStripMenuItem("Overlay mode") { ToolTipText = "Light: FPS, temp, power. Default adds fan RPM. Full adds usage bars. Complete adds names and memory.\nCtrl+Shift+Alt + left click on the overlay cycles the modes." };
+            foreach (OverlayMode om in new[] { OverlayMode.Light, OverlayMode.Default, OverlayMode.Full, OverlayMode.Complete })
+            { var mm = om; overlayMode.DropDownItems.Add(new ToolStripMenuItem(om.ToString(), null, (s, e) => OverlayOsd.SetMode(mm)) { Tag = om }); }
+            overlayMode.DropDownOpening += (s, e) => { foreach (ToolStripMenuItem it in overlayMode.DropDownItems) it.Checked = (OverlayMode)it.Tag == OverlayOsd.Mode; };
+            m.Items.Add(overlayMode);
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add(new ToolStripMenuItem("Run firmware / driver test", null, (s, e) => RunTest()));
             m.Items.Add(new ToolStripMenuItem("Load vBIOS dump...", null, (s, e) => LoadVbiosDump()));

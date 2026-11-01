@@ -89,6 +89,9 @@ ladder hold. They are under **Power profile → Experimental expansions**.
   undervolt. The SMU mailbox is shared with ASUS services, so a write can collide; an
   over-aggressive undervolt destabilises under load. Only Strix Point (Ryzen AI 300) is
   enabled.
+  **Balanced is −20 all-core CO and 95 °C when this option is enabled.** Selecting
+  Balanced with the option disabled does not apply or clear a CPU undervolt;
+  a setting previously applied by another profile or tool may remain.
   Disabling tuning clears Curve Optimizer, but does not restore an earlier SMU
   temperature limit; reboot to reset it. The previous limit cannot be read back by
   this implementation.

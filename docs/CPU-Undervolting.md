@@ -32,6 +32,12 @@ per-core voltage picker:
 | Turbo | −25 steps | 96 °C |
 | NvTgpHold-Manual | −25 steps | 90 °C |
 
+**Balanced does include CPU undervolting:** with **Apply CPU undervolt + temp
+from profile** enabled, it requests **−20 all-core CO steps and a 95 °C CPU limit**.
+Selecting Balanced with that option disabled makes no CO or SMU temperature
+request; a previously applied setting may remain. Explicitly switching the option
+off requests CO = 0. These are separate actions.
+
 These are Curve Optimizer counts, **not millivolts**. For example, −25 does not
 mean a fixed −25 mV. Negative Curve Optimizer values request a shift toward lower
 voltages in the CPU's voltage/frequency curve; actual operating voltage depends

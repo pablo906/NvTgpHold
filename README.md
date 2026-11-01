@@ -28,7 +28,7 @@ See [Installation](docs/Installation.md) for upgrading and optional startup task
 | Hold CURRENT | Set the enforced GPU power limit and re-apply it after detected drops and power events. |
 | Set MAX ceiling | Save a persistent ceiling override; apply it with an offered GPU restart or a reboot. A vBIOS dump is read once to locate the field; nothing is flashed. |
 | NVPCF sync | Match the ASUS platform power setting to the hold target, with readback and prior-value restoration. |
-| Hardware overlay | Optional click-through GPU/CPU telemetry and experimental foreground-app FPS. See [Usage](docs/Usage.md#hardware-overlay) for sensor and display limitations. |
+| Hardware overlay | Optional click-through GPU/CPU telemetry in four modes (power chart, battery, VRAM/RAM) and experimental foreground-app FPS. See [Usage](docs/Usage.md#hardware-overlay) for sensor and display limitations. |
 | Auto re-assert | Optionally resend the GPU hold and CPU profile every 1–30 seconds; default interval is 2 seconds. |
 | CPU power profiles | Apply 18 / 28 / 35 / 45 W sustained CPU profiles on AMD Strix Point, with optional Windows Efficient Enabled boost mode. |
 | Experimental EC CPU ladder hold | On GA403WW BIOS 312 only, periodically reset EC throttle accumulators. Requires PawnIO and explicit opt-in. |

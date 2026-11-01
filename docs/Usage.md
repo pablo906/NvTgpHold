@@ -92,6 +92,8 @@ ladder hold. They are under **Power profile → Experimental expansions**.
   Disabling tuning clears Curve Optimizer, but does not restore an earlier SMU
   temperature limit; reboot to reset it. The previous limit cannot be read back by
   this implementation.
+  See [CPU undervolting](CPU-Undervolting.md) for the all-core CO values, activation
+  and clearing behavior, SMU mechanism, and the distinction from GPU clock offsets.
 - **GPU display mode** (ASUS ATK): Eco / Standard / Ultimate / Optimized. Switching into
   or out of Ultimate (MUX) needs a reboot, which NvTgpHold offers after you confirm; Eco
   and Standard re-initialise the display (sign out or reboot for a clean switch).

@@ -5,10 +5,22 @@ Optimizer. It does not undervolt NVIDIA GPU core, SYS, XBAR, video or memory.
 
 ## Enable it and select a value
 
-In the tray menu, open **Power profile → Experimental expansions** and enable
-**Apply CPU undervolt + temp from profile**. This is off by default and requires
-supported Strix Point hardware, PawnIO and the signed `RyzenSMU.bin` beside the
-executable. An unavailable control reports why detection failed.
+1. Right-click the **NvTgpHold** tray icon and open **Power profile (replaces G-Helper)**.
+2. Look below **Fan profile**. **Experimental expansions** is a disabled section
+   heading, not a submenu. The next two checkboxes are GPU OC and
+   **Apply CPU undervolt + temp from profile**.
+3. Check the CPU option and accept its experimental-tuning prompt.
+4. Select a full NvTgpHold power profile if none is active. With an active profile,
+   enabling the option immediately sends its CO and temperature requests.
+
+The option is off by default. It requires supported Strix Point hardware, PawnIO
+and the signed `RyzenSMU.bin` beside the executable. It stays visible but greyed
+out when detection fails; hover for the **Unavailable:** reason. If it is absent,
+confirm that you opened NvTgpHold's full Power profile menu, not the standalone
+CPU power menu, and are running the expected executable/version.
+
+On a successful immediate apply, status reports `SMU CO=-20` or `SMU CO=-25` for
+the active profile. This reports command acceptance, not measured voltage.
 
 The active power profile supplies both values; there is no separate millivolt or
 per-core voltage picker:
@@ -25,6 +37,18 @@ mean a fixed −25 mV. Negative Curve Optimizer values request a shift toward lo
 voltages in the CPU's voltage/frequency curve; actual operating voltage depends
 on the operating point. See [AMD's Curve Optimizer explanation](https://docs.amd.com/r/en-US/68886-ryzen-master-user-guide/Curve-Optimizer).
 The presets are not stability guarantees; see [Safety](Safety.md).
+
+## Does it follow G-Helper's profile?
+
+No. NvTgpHold's profiles are bundled values defined in `Profiles.cs`, originally
+based on the owner's G-Helper configuration. They are not imported from the live
+G-Helper profile or updated when G-Helper changes.
+
+With CPU tuning enabled, NvTgpHold writes its own selected profile's CO value.
+With it disabled, applying a profile does not write CO, so an earlier value from
+G-Helper, firmware or another tool may remain. NvTgpHold does not read that value
+back or adopt it as its own. The initially unchecked option is therefore not
+proof of CO = 0; explicitly turning it off sends the zero request described below.
 
 ## When the request is sent
 

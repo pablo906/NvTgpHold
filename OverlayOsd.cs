@@ -60,9 +60,11 @@ namespace NvTgpHold
         public static void Show()
         {
             if (_win != null) return;
-            _ui = SynchronizationContext.Current;
             _hist = new PowerHistory();                          // a fresh chart on every Show, not a stale one
             _win = new OsdWindow();
+            // Constructing a Control installs the WinForms synchronization context, so read it only now: captured before
+            // any control exists it is null and every Post below would silently drop its frame.
+            _ui = SynchronizationContext.Current;
             _win.Clicked += CycleMode;
             _win.Show();
             _fps = new EtwFpsMonitor(); try { _fps.Start(); } catch { }   // fail-safe: FPS shows "--" if ETW can't start
@@ -110,19 +112,7 @@ namespace NvTgpHold
             {
                 if (Smi.Run("--query-gpu=temperature.gpu,power.draw,utilization.gpu,memory.used,memory.total,name --format=csv,noheader,nounits", 4000, out string o))
                 {
-                    var p = o.Split('\n')[0].Split(',');
-                    if (p.Length >= 3)
-                    {
-                        if (int.TryParse(p[0].Trim(), out int t)) s.GpuTemp = t;
-                        if (double.TryParse(p[1].Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out double w)) s.GpuPower = w;
-                        if (int.TryParse(p[2].Trim(), out int u)) s.GpuUtil = u;
-                    }
-                    if (p.Length >= 6)
-                    {
-                        if (double.TryParse(p[3].Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out double used)) s.VramUsedGb = used / 1024.0;
-                        if (double.TryParse(p[4].Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out double total)) s.VramTotalGb = total / 1024.0;
-                        s.GpuName = p[5].Trim();
-                    }
+                    OverlayLayout.ApplyGpuCsv(s, o.Split('\n')[0]);
                 }
             });
             try { _cpuLoad ??= new PerformanceCounter("Processor", "% Processor Time", "_Total"); s.CpuUtil = (int)Math.Round(_cpuLoad.NextValue()); }

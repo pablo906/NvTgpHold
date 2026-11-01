@@ -86,6 +86,24 @@ namespace NvTgpHold
             return Regex.Replace(s, @"\s+", " ").Trim();
         }
 
+        // One line of `nvidia-smi --query-gpu=temperature.gpu,power.draw,utilization.gpu,memory.used,memory.total,name
+        // --format=csv,noheader,nounits`. Newer drivers report whole-number fields with decimals (temperature.gpu is
+        // "70.16" on driver 621.01), so every number is parsed as a double and rounded - an integer-only parse leaves the
+        // temperature permanently unavailable. Anything that doesn't parse stays unavailable; memory is MiB -> GB.
+        public static void ApplyGpuCsv(OverlayData d, string line)
+        {
+            if (string.IsNullOrWhiteSpace(line)) return;
+            var p = line.Split(',');
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            const System.Globalization.NumberStyles ns = System.Globalization.NumberStyles.Float;
+            if (p.Length >= 1 && double.TryParse(p[0].Trim(), ns, inv, out double t)) d.GpuTemp = (int)Math.Round(t);
+            if (p.Length >= 2 && double.TryParse(p[1].Trim(), ns, inv, out double w)) d.GpuPower = w;
+            if (p.Length >= 3 && double.TryParse(p[2].Trim(), ns, inv, out double u)) d.GpuUtil = (int)Math.Round(u);
+            if (p.Length >= 4 && double.TryParse(p[3].Trim(), ns, inv, out double used)) d.VramUsedGb = used / 1024.0;
+            if (p.Length >= 5 && double.TryParse(p[4].Trim(), ns, inv, out double total)) d.VramTotalGb = total / 1024.0;
+            if (p.Length >= 6) d.GpuName = p[5].Trim();
+        }
+
         // Signed battery rate: "+12.3W" charging, "-12.3W" discharging, "0.0W" idle, "--W" unknown.
         public static string FormatRate(double w) =>
             double.IsNaN(w) || double.IsInfinity(w) ? "--W" : w.ToString("+0.0;-0.0;0.0", System.Globalization.CultureInfo.InvariantCulture) + "W";

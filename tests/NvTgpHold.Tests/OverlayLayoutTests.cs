@@ -28,6 +28,35 @@ namespace NvTgpHold.Tests
         }
 
         [Fact]
+        public void Gpu_csv_with_decimal_temperature_from_driver_621_01_parses()
+        {
+            // Verbatim from nvidia-smi on the GA403WW: temperature.gpu is "70.16", not "70".
+            var d = new OverlayData();
+            OverlayLayout.ApplyGpuCsv(d, "70.16, 118.35, 99, 6349, 16303, NVIDIA GeForce RTX 5080 Laptop GPU\r");
+            Assert.Equal(70, d.GpuTemp);
+            Assert.Equal(118.35, d.GpuPower, 2);
+            Assert.Equal(99, d.GpuUtil);
+            Assert.Equal(6349 / 1024.0, d.VramUsedGb, 3);
+            Assert.Equal(16303 / 1024.0, d.VramTotalGb, 3);
+            Assert.Equal("NVIDIA GeForce RTX 5080 Laptop GPU", d.GpuName);
+        }
+
+        [Fact]
+        public void Gpu_csv_with_whole_numbers_and_with_unavailable_fields()
+        {
+            var d = new OverlayData();
+            OverlayLayout.ApplyGpuCsv(d, "48, 19.44, 6, 749, 16303, RTX");
+            Assert.Equal((48, 6), (d.GpuTemp, d.GpuUtil));
+
+            var bad = new OverlayData();
+            OverlayLayout.ApplyGpuCsv(bad, "[N/A], [N/A], [N/A]");          // dGPU asleep / driver restarting
+            Assert.Equal(-1, bad.GpuTemp); Assert.True(double.IsNaN(bad.GpuPower)); Assert.Equal(-1, bad.GpuUtil);
+            OverlayLayout.ApplyGpuCsv(bad, "");                              // empty output changes nothing
+            OverlayLayout.ApplyGpuCsv(bad, null);
+            Assert.Equal(-1, bad.GpuTemp);
+        }
+
+        [Fact]
         public void Battery_column_needs_default_or_higher_and_being_on_battery()
         {
             Assert.True((OverlayLayout.ColumnsFor(OverlayMode.Default, true) & OverlayCols.Battery) != 0);

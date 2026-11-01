@@ -21,6 +21,7 @@ namespace NvTgpHold.Tests
             Assert.Equal(def, def & full);
             Assert.Equal(full, full & complete);
             Assert.True((def & OverlayCols.Fan) != 0 && (light & OverlayCols.Fan) == 0);
+            Assert.True((def & OverlayCols.Chart) != 0 && (light & OverlayCols.Chart) == 0);
             Assert.True((full & OverlayCols.Usage) != 0 && (def & OverlayCols.Usage) == 0);
             Assert.True((complete & (OverlayCols.Names | OverlayCols.Memory)) == (OverlayCols.Names | OverlayCols.Memory));
             Assert.True((full & (OverlayCols.Names | OverlayCols.Memory)) == 0);
@@ -63,6 +64,41 @@ namespace NvTgpHold.Tests
         [InlineData(4.0, 0.0, -1)]
         public void Used_percent_is_clamped_and_unknown_is_minus_one(double used, double total, int expected)
             => Assert.Equal(expected, OverlayLayout.UsedPercent(used, total));
+
+        [Fact]
+        public void Power_history_keeps_the_newest_60_samples_oldest_first()
+        {
+            var h = new PowerHistory();
+            for (int i = 1; i <= 65; i++) h.Add(i, i * 2);
+            Assert.Equal(6.0, h.Cpu(0));                                   // samples 1-5 fell off the front
+            Assert.Equal(65.0, h.Cpu(PowerHistory.Samples - 1));
+            Assert.Equal(130.0, h.Gpu(PowerHistory.Samples - 1));
+        }
+
+        [Fact]
+        public void Power_history_peak_has_a_floor_and_follows_the_stacked_maximum()
+        {
+            var h = new PowerHistory();
+            Assert.Equal(PowerHistory.MinPeak, h.Peak);                    // empty: never below 10 W
+            h.Add(3, 4);
+            Assert.Equal(PowerHistory.MinPeak, h.Peak);                    // 7 W stacked is still under the floor
+            h.Add(30, 90);
+            Assert.Equal(120.0, h.Peak);                                   // CPU + GPU stacked
+            for (int i = 0; i < PowerHistory.Samples; i++) h.Add(1, 1);
+            Assert.Equal(PowerHistory.MinPeak, h.Peak);                    // the spike scrolled off
+        }
+
+        [Fact]
+        public void Power_history_treats_unavailable_readings_as_zero()
+        {
+            var h = new PowerHistory();
+            h.Add(double.NaN, -5);
+            Assert.Equal(0.0, h.Cpu(PowerHistory.Samples - 1));
+            Assert.Equal(0.0, h.Gpu(PowerHistory.Samples - 1));
+            h.Add(double.PositiveInfinity, 12);
+            Assert.Equal(0.0, h.Cpu(PowerHistory.Samples - 1));
+            Assert.Equal(12.0, h.Gpu(PowerHistory.Samples - 1));
+        }
 
         [Fact]
         public void Overlay_mode_round_trips_through_settings_and_bad_values_fall_back()

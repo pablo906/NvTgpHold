@@ -25,6 +25,7 @@ namespace NvTgpHold
         private static bool _cpuSensorsInit;
         private static EtwFpsMonitor _fps;
         private static OverlayMode _mode = OverlayMode.Default;
+        private static PowerHistory _hist = new PowerHistory();                 // UI thread only: updated where a frame is published
         private static Action<OverlayMode> _onModeChanged;
         private static readonly int _selfPid = Process.GetCurrentProcess().Id;
 
@@ -60,6 +61,7 @@ namespace NvTgpHold
         {
             if (_win != null) return;
             _ui = SynchronizationContext.Current;
+            _hist = new PowerHistory();                          // a fresh chart on every Show, not a stale one
             _win = new OsdWindow();
             _win.Clicked += CycleMode;
             _win.Show();
@@ -80,7 +82,7 @@ namespace NvTgpHold
                         _ui?.Post(_ =>
                         {
                             if (!token.IsCancellationRequested && gen == _gen && _win != null)
-                            { _snap = snap; try { Render(); } catch { } }
+                            { _snap = snap; _hist.Add(snap.CpuPower, snap.GpuPower); try { Render(); } catch { } }
                         }, null);
                     }
                     catch { }
@@ -176,7 +178,7 @@ namespace NvTgpHold
         private static void Render()
         {
             if (_win == null) return;
-            using (var bmp = OverlayRenderer.Draw(_snap, _mode))
+            using (var bmp = OverlayRenderer.Draw(_snap, _mode, _hist))
             {
                 var scr = Screen.PrimaryScreen.Bounds;
                 _win.Size = bmp.Size;

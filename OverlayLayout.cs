@@ -22,14 +22,39 @@ namespace NvTgpHold
         public string GpuName = "", CpuName = "";
     }
 
+    // The last 60 one-second CPU/GPU power samples behind the stacked-area chart. NaN / negative readings count as 0.
+    internal sealed class PowerHistory
+    {
+        public const int Samples = 60;
+        public const double MinPeak = 10;                    // the vertical scale never shrinks below 10 W
+        private readonly double[] _cpu = new double[Samples], _gpu = new double[Samples];
+
+        public void Add(double cpuW, double gpuW)
+        {
+            Array.Copy(_cpu, 1, _cpu, 0, Samples - 1); Array.Copy(_gpu, 1, _gpu, 0, Samples - 1);
+            _cpu[Samples - 1] = Clean(cpuW); _gpu[Samples - 1] = Clean(gpuW);
+        }
+
+        public double Cpu(int i) => _cpu[i];                 // 0 = oldest, Samples-1 = newest
+        public double Gpu(int i) => _gpu[i];
+
+        // Largest stacked (CPU + GPU) value, at least MinPeak: the chart's full height.
+        public double Peak
+        {
+            get { double p = MinPeak; for (int i = 0; i < Samples; i++) p = Math.Max(p, _cpu[i] + _gpu[i]); return p; }
+        }
+
+        private static double Clean(double w) => double.IsNaN(w) || double.IsInfinity(w) || w < 0 ? 0 : w;
+    }
+
     internal static class OverlayLayout
     {
-        // Light: FPS | temp | power. Default adds fan RPM (and the chart / battery, when those exist). Full adds usage % and
-        // its bar. Complete adds the short GPU/CPU names and the VRAM / RAM figures with their bars.
+        // Light: FPS | temp | power. Default adds fan RPM and the power chart (and the battery column, when those exist).
+        // Full adds usage % and its bar. Complete adds the short GPU/CPU names and the VRAM / RAM figures with their bars.
         public static OverlayCols ColumnsFor(OverlayMode mode)
         {
             var c = OverlayCols.Fps | OverlayCols.Temp | OverlayCols.Power;
-            if (mode >= OverlayMode.Default) c |= OverlayCols.Fan;
+            if (mode >= OverlayMode.Default) c |= OverlayCols.Fan | OverlayCols.Chart;
             if (mode >= OverlayMode.Full) c |= OverlayCols.Usage;
             if (mode >= OverlayMode.Complete) c |= OverlayCols.Names | OverlayCols.Memory;
             return c;

@@ -23,7 +23,7 @@ namespace NvTgpHold
             public Action<Graphics, int> Draw;                                // x of the column's left edge
         }
 
-        public static Bitmap Draw(OverlayData d, OverlayMode mode)
+        public static Bitmap Draw(OverlayData d, OverlayMode mode, PowerHistory hist = null)
         {
             var cols = OverlayLayout.ColumnsFor(mode);
             int pad = (int)(6 * Scale), gap = (int)(5 * Scale), lineGap = (int)(3 * Scale);
@@ -76,6 +76,11 @@ namespace NvTgpHold
                                 }
                             },
                         });
+                    }
+                    if ((cols & OverlayCols.Chart) != 0 && hist != null)
+                    {
+                        int sw = Math.Max(1, (int)Scale), cw = PowerHistory.Samples * sw;
+                        list.Add(new Col { W = cw, Draw = (g, x) => Chart(g, hist, x, pad, cw, innerH, sw) });
                     }
                     if ((cols & OverlayCols.Power) != 0)
                         list.Add(new Col { W = Chars(6), Draw = (g, x) => { Row(g, Pow(d.GpuPower, false), font, Gpu, x, y0, Chars(6), lineH, sfFar); Row(g, Pow(d.CpuPower, true), font, Cpu, x, y1, Chars(6), lineH, sfFar); } });
@@ -138,6 +143,28 @@ namespace NvTgpHold
         // GPU shows one decimal; a CPU reading of zero is blank (no data yet) rather than "0.0W".
         private static string Pow(double w, bool blankZero) =>
             double.IsNaN(w) ? "--W" : blankZero && w <= 0 ? "" : w.ToString("0.0", CultureInfo.InvariantCulture) + "W";
+
+        // Stacked area of CPU power (bottom) and GPU power (on top of it) over the last 60 samples, newest at the right.
+        // Fills are each row's colour at one-third brightness, alpha 128; the full height is the peak stacked value.
+        private static void Chart(Graphics g, PowerHistory h, int x, int y, int w, int ht, int sw)
+        {
+            double peak = h.Peak;
+            int bottom = y + ht, n = PowerHistory.Samples;
+            var cpuPts = new List<PointF>(); var gpuPts = new List<PointF>(); var gpuBase = new List<PointF>();
+            for (int i = 0; i < n; i++)
+            {
+                float px = x + i * sw + sw / 2f;
+                float cpuTop = (float)(bottom - Math.Min(1.0, h.Cpu(i) / peak) * ht);
+                float gpuTop = (float)Math.Max(y, cpuTop - Math.Min(1.0, h.Gpu(i) / peak) * ht);
+                cpuPts.Add(new PointF(px, cpuTop)); gpuBase.Add(new PointF(px, cpuTop)); gpuPts.Add(new PointF(px, gpuTop));
+            }
+            var cpuPoly = new List<PointF>(cpuPts) { new PointF(cpuPts[n - 1].X, bottom), new PointF(cpuPts[0].X, bottom) };
+            var gpuPoly = new List<PointF>(gpuPts); for (int i = n - 1; i >= 0; i--) gpuPoly.Add(gpuBase[i]);
+            using (var bc = new SolidBrush(Dimmed(Cpu))) g.FillPolygon(bc, cpuPoly.ToArray());
+            using (var bg = new SolidBrush(Dimmed(Gpu))) g.FillPolygon(bg, gpuPoly.ToArray());
+        }
+
+        private static Color Dimmed(Color c) => Color.FromArgb(128, c.R / 3, c.G / 3, c.B / 3);
 
         // Vertical segmented bar filling from the bottom: lit segments for the used share, dim for the rest.
         private static void VBar(Graphics g, int x, int y, int w, int h, int pct, Color lit, Color dim)

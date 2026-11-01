@@ -138,6 +138,13 @@ namespace NvTgpHold
                 { s.RamTotalGb = m.ullTotalPhys / 1073741824.0; s.RamUsedGb = (m.ullTotalPhys - m.ullAvailPhys) / 1073741824.0; }
             }
             catch { }
+            try
+            {
+                var b = BatteryInfo.Read();                      // battery column shows only while on battery
+                s.OnBattery = b.Present && !b.OnAc;
+                s.BatteryPct = b.Percent; s.BatteryRateW = b.RateW;
+            }
+            catch { }
             s.GpuFan = AtkAcpi.ReadFan(true);                    // ATK, not NVIDIA - safe to read during a dGPU restart
             s.CpuFan = AtkAcpi.ReadFan(false);
             // FPS of the foreground app (excluding ourselves) via the ETW present monitor; -1/0 shows "--".

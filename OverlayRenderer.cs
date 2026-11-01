@@ -25,7 +25,7 @@ namespace NvTgpHold
 
         public static Bitmap Draw(OverlayData d, OverlayMode mode, PowerHistory hist = null)
         {
-            var cols = OverlayLayout.ColumnsFor(mode);
+            var cols = OverlayLayout.ColumnsFor(mode, d.OnBattery);
             int pad = (int)(6 * Scale), gap = (int)(5 * Scale), lineGap = (int)(3 * Scale);
             using (var font = new Font("Consolas", 13f * Scale, FontStyle.Regular, GraphicsUnit.Pixel))
             using (var smallFont = new Font("Consolas", 8.5f * Scale, FontStyle.Regular, GraphicsUnit.Pixel))
@@ -84,6 +84,21 @@ namespace NvTgpHold
                     }
                     if ((cols & OverlayCols.Power) != 0)
                         list.Add(new Col { W = Chars(6), Draw = (g, x) => { Row(g, Pow(d.GpuPower, false), font, Gpu, x, y0, Chars(6), lineH, sfFar); Row(g, Pow(d.CpuPower, true), font, Cpu, x, y1, Chars(6), lineH, sfFar); } });
+                    if ((cols & OverlayCols.Battery) != 0)
+                    {
+                        // Level + bar on the GPU row, signed rate on the CPU row, in light grey with a dim empty bar.
+                        int bw = Math.Max(Chars(4) + (int)(3 * Scale) + barW, Chars(7));
+                        list.Add(new Col
+                        {
+                            W = bw,
+                            Draw = (g, x) =>
+                            {
+                                Row(g, OverlayLayout.FormatPercent(d.BatteryPct), font, Light, x, y0, Chars(4), lineH, sfFar);
+                                VBar(g, x + Chars(4) + (int)(3 * Scale), y0, barW, lineH, d.BatteryPct, Light, Color.FromArgb(60, 60, 60));
+                                Row(g, OverlayLayout.FormatRate(d.BatteryRateW), font, Light, x, y1, bw, lineH, sfFar);
+                            },
+                        });
+                    }
                     if ((cols & OverlayCols.Usage) != 0)
                         list.Add(new Col { W = Chars(4) + (int)(3 * Scale) + barW, Draw = (g, x) => { UsageRow(g, d.GpuUtil, Gpu, x, y0); UsageRow(g, d.CpuUtil, Cpu, x, y1); } });
                     if ((cols & OverlayCols.Memory) != 0)

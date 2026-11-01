@@ -20,6 +20,9 @@ namespace NvTgpHold
         public double GpuPower = double.NaN, CpuPower = double.NaN;
         public double VramUsedGb = double.NaN, VramTotalGb = double.NaN, RamUsedGb = double.NaN, RamTotalGb = double.NaN;
         public string GpuName = "", CpuName = "";
+        public bool OnBattery;                               // a battery exists and mains is disconnected
+        public int BatteryPct = -1;
+        public double BatteryRateW = double.NaN;             // + charging, - discharging
     }
 
     // The last 60 one-second CPU/GPU power samples behind the stacked-area chart. NaN / negative readings count as 0.
@@ -51,10 +54,10 @@ namespace NvTgpHold
     {
         // Light: FPS | temp | power. Default adds fan RPM and the power chart (and the battery column, when those exist).
         // Full adds usage % and its bar. Complete adds the short GPU/CPU names and the VRAM / RAM figures with their bars.
-        public static OverlayCols ColumnsFor(OverlayMode mode)
+        public static OverlayCols ColumnsFor(OverlayMode mode, bool onBattery = false)
         {
             var c = OverlayCols.Fps | OverlayCols.Temp | OverlayCols.Power;
-            if (mode >= OverlayMode.Default) c |= OverlayCols.Fan | OverlayCols.Chart;
+            if (mode >= OverlayMode.Default) { c |= OverlayCols.Fan | OverlayCols.Chart; if (onBattery) c |= OverlayCols.Battery; }
             if (mode >= OverlayMode.Full) c |= OverlayCols.Usage;
             if (mode >= OverlayMode.Complete) c |= OverlayCols.Names | OverlayCols.Memory;
             return c;
@@ -82,6 +85,12 @@ namespace NvTgpHold
             s = Regex.Replace(s, @"\b\d+-Core\b|@.*$", " ", RegexOptions.IgnoreCase);
             return Regex.Replace(s, @"\s+", " ").Trim();
         }
+
+        // Signed battery rate: "+12.3W" charging, "-12.3W" discharging, "0.0W" idle, "--W" unknown.
+        public static string FormatRate(double w) =>
+            double.IsNaN(w) || double.IsInfinity(w) ? "--W" : w.ToString("+0.0;-0.0;0.0", System.Globalization.CultureInfo.InvariantCulture) + "W";
+
+        public static string FormatPercent(int pct) => pct < 0 ? "--%" : Math.Min(100, pct) + "%";
 
         // Percentage used, clamped to 0-100; unknown -> -1 (draws an empty bar).
         public static int UsedPercent(double used, double total) =>

@@ -28,6 +28,30 @@ namespace NvTgpHold.Tests
         }
 
         [Fact]
+        public void Battery_column_needs_default_or_higher_and_being_on_battery()
+        {
+            Assert.True((OverlayLayout.ColumnsFor(OverlayMode.Default, true) & OverlayCols.Battery) != 0);
+            Assert.True((OverlayLayout.ColumnsFor(OverlayMode.Complete, true) & OverlayCols.Battery) != 0);
+            Assert.True((OverlayLayout.ColumnsFor(OverlayMode.Default, false) & OverlayCols.Battery) == 0);   // on AC: hidden
+            Assert.True((OverlayLayout.ColumnsFor(OverlayMode.Light, true) & OverlayCols.Battery) == 0);      // Light never shows it
+        }
+
+        [Theory]
+        [InlineData(-12.34, "-12.3W")]
+        [InlineData(5.0, "+5.0W")]
+        [InlineData(0.0, "0.0W")]
+        [InlineData(double.NaN, "--W")]
+        [InlineData(double.PositiveInfinity, "--W")]
+        public void Battery_rate_is_signed(double w, string expected) => Assert.Equal(expected, OverlayLayout.FormatRate(w));
+
+        [Theory]
+        [InlineData(87, "87%")]
+        [InlineData(100, "100%")]
+        [InlineData(130, "100%")]
+        [InlineData(-1, "--%")]
+        public void Battery_percent_text(int pct, string expected) => Assert.Equal(expected, OverlayLayout.FormatPercent(pct));
+
+        [Fact]
         public void Click_cycle_visits_all_four_modes_and_wraps()
         {
             var m = OverlayMode.Light;
